@@ -11,6 +11,7 @@ A simple frame-by-frame input tool for Tekken-style notation with two-player sup
 - Basic GUI (Tkinter) with editable timeline columns
 - Startup delay, looping playback, and auto window focusing on play
 - Selectable input backend (pynput, pydirectinput, or log-only)
+- Inputs are pressed for one frame by default, then released on the next frame
 
 ## Run
 ```bash

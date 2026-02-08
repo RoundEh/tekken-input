@@ -108,7 +108,7 @@ class KeyboardEmulator:
         self.controller = KeyboardController() if PYNPUT_AVAILABLE else None
         self.mode = "pynput"
 
-    def press_keys(self, keys: list[str]) -> None:
+    def key_down(self, keys: list[str]) -> None:
         if not keys:
             return
         if self.mode == "pydirectinput":
@@ -118,8 +118,6 @@ class KeyboardEmulator:
                 return
             for key in keys:
                 pydirectinput.keyDown(self._convert_key(key))
-            for key in keys:
-                pydirectinput.keyUp(self._convert_key(key))
             return
         if self.mode == "pynput":
             if not PYNPUT_AVAILABLE:
@@ -128,10 +126,29 @@ class KeyboardEmulator:
                 return
             for key in keys:
                 self.controller.press(self._convert_key(key))
+            return
+        self.log_queue.put(f"[LOG ONLY] Press: {keys}")
+
+    def key_up(self, keys: list[str]) -> None:
+        if not keys:
+            return
+        if self.mode == "pydirectinput":
+            if not PYDIRECT_AVAILABLE:
+                self.log_queue.put("[NO EMU] pydirectinput not installed.")
+                self.log_queue.put(f"[NO EMU] Release: {keys}")
+                return
+            for key in keys:
+                pydirectinput.keyUp(self._convert_key(key))
+            return
+        if self.mode == "pynput":
+            if not PYNPUT_AVAILABLE:
+                self.log_queue.put("[NO EMU] pynput not installed.")
+                self.log_queue.put(f"[NO EMU] Release: {keys}")
+                return
             for key in keys:
                 self.controller.release(self._convert_key(key))
             return
-        self.log_queue.put(f"[LOG ONLY] Press: {keys}")
+        self.log_queue.put(f"[LOG ONLY] Release: {keys}")
 
     def _convert_key(self, key: str):
         special = {
@@ -413,8 +430,7 @@ class TekkenInputApp:
                 if self.stop_event.is_set():
                     break
                 self._log(f"Frame {idx:03d} -> P1: {frame.p1 or '-'} | P2: {frame.p2 or '-'}")
-                self._emit_inputs(frame)
-                time.sleep(frame_duration)
+                self._emit_inputs(frame, frame_duration)
             if not loop_enabled:
                 break
             if loop_target and loops_done >= loop_target:
@@ -493,14 +509,20 @@ class TekkenInputApp:
         result = os.system(f"wmctrl -a '{title}'")
         return result == 0
 
-    def _emit_inputs(self, frame: FrameInput) -> None:
+    def _emit_inputs(self, frame: FrameInput, frame_duration: float) -> None:
+        emitted = False
         for label, player, notation in (("P1", 1, frame.p1), ("P2", 2, frame.p2)):
             steps = self.parser.parse(notation, player)
             if not steps:
                 continue
+            emitted = True
             for step in steps:
                 self._log(f"{label} step -> {step}")
-                self.emulator.press_keys(step)
+                self.emulator.key_down(step)
+                time.sleep(frame_duration)
+                self.emulator.key_up(step)
+        if not emitted:
+            time.sleep(frame_duration)
 
     def _log(self, message: str) -> None:
         self.log_queue.put(message)
