@@ -207,7 +207,7 @@ class TekkenInputApp:
         focus_frame.grid(row=3, column=0, sticky="ew", pady=10)
         focus_frame.columnconfigure(1, weight=1)
         ttk.Label(focus_frame, text="Window Title:").grid(row=0, column=0, padx=4, pady=4)
-        self.window_title_var = tk.StringVar(value="Tekken 8")
+        self.window_title_var = tk.StringVar(value="TEKKEN™8")
         ttk.Entry(focus_frame, textvariable=self.window_title_var).grid(row=0, column=1, sticky="ew")
         ttk.Button(focus_frame, text="Focus", command=self._focus_window).grid(row=0, column=2, padx=4)
 
@@ -293,6 +293,7 @@ class TekkenInputApp:
     def _start_playback(self) -> None:
         if self.playback_thread and self.playback_thread.is_alive():
             return
+        self._focus_window(auto=True)
         self.stop_event.clear()
         self.playback_thread = threading.Thread(target=self._playback_loop, daemon=True)
         self.playback_thread.start()
@@ -330,10 +331,11 @@ class TekkenInputApp:
                 break
         self._log("Playback finished")
 
-    def _focus_window(self) -> None:
+    def _focus_window(self, auto: bool = False) -> None:
         title = self.window_title_var.get().strip()
         if not title:
-            messagebox.showwarning("Focus Window", "Please provide a window title.")
+            if not auto:
+                messagebox.showwarning("Focus Window", "Please provide a window title.")
             return
         if platform.startswith("win"):
             success = self._focus_window_windows(title)
@@ -345,10 +347,11 @@ class TekkenInputApp:
             self._log(f"Focused window: {title}")
         else:
             self._log(f"Failed to focus window: {title}")
-            messagebox.showwarning(
-                "Focus Window",
-                "Unable to focus the window automatically. Try clicking the game window manually.",
-            )
+            if not auto:
+                messagebox.showwarning(
+                    "Focus Window",
+                    "Unable to focus the window automatically. Try clicking the game window manually.",
+                )
 
     def _focus_window_windows(self, title: str) -> bool:
         try:
