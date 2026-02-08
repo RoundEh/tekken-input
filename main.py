@@ -515,18 +515,21 @@ class TekkenInputApp:
         return result == 0
 
     def _emit_inputs(self, frame: FrameInput, frame_duration: float) -> None:
-        emitted = False
+        keys_to_press: list[str] = []
         for label, player, notation in (("P1", 1, frame.p1), ("P2", 2, frame.p2)):
             steps = self.parser.parse(notation, player)
             if not steps:
                 continue
-            emitted = True
-            for step in steps:
-                self._log(f"{label} step -> {step}")
-                self.emulator.key_down(step)
-                time.sleep(frame_duration)
-                self.emulator.key_up(step)
-        if not emitted:
+            if len(steps) > 1:
+                self._log(f"{label} warning: multiple steps in one frame, using first step only")
+            step = steps[0]
+            self._log(f"{label} step -> {step}")
+            keys_to_press.extend(step)
+        if keys_to_press:
+            self.emulator.key_down(keys_to_press)
+            time.sleep(frame_duration)
+            self.emulator.key_up(keys_to_press)
+        else:
             time.sleep(frame_duration)
 
     def _log(self, message: str) -> None:
