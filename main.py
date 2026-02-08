@@ -224,7 +224,7 @@ class TekkenInputApp:
         self.active_drag_payload: str | None = None
         self.drag_indicator: tk.Toplevel | None = None
         self.drag_label: tk.Label | None = None
-        self.builder_direction: str | None = None
+        self.builder_directions: set[str] = set()
         self.builder_buttons: set[str] = set()
         self.builder_notation = tk.StringVar(value="")
         self.builder_block: tk.Canvas | None = None
@@ -627,10 +627,10 @@ class TekkenInputApp:
         token = next((tag for tag in tags if tag in self.dpad_items), None)
         if not token:
             return
-        if self.builder_direction == token:
-            self.builder_direction = None
+        if token in self.builder_directions:
+            self.builder_directions.remove(token)
         else:
-            self.builder_direction = token
+            self.builder_directions.add(token)
         self._update_builder_visuals()
 
     def _on_button_click(self, event: tk.Event) -> None:
@@ -652,7 +652,7 @@ class TekkenInputApp:
 
     def _update_builder_visuals(self) -> None:
         for token, (oval, text) in self.dpad_items.items():
-            fill = "#ffb3b3" if self.builder_direction == token else "#f0f0f0"
+            fill = "#ffb3b3" if token in self.builder_directions else "#f0f0f0"
             if self.dpad_canvas:
                 self.dpad_canvas.itemconfigure(oval, fill=fill)
                 self.dpad_canvas.itemconfigure(text, fill="#222")
@@ -669,14 +669,15 @@ class TekkenInputApp:
 
     def _compose_builder_notation(self) -> str:
         parts: list[str] = []
-        if self.builder_direction:
-            parts.append(self.builder_direction)
+        if self.builder_directions:
+            order = ["u", "d", "b", "f"]
+            parts.append("".join([token for token in order if token in self.builder_directions]))
         if self.builder_buttons:
             parts.extend(sorted(self.builder_buttons, key=lambda x: int(x)))
         return "+".join(parts)
 
     def _clear_builder(self) -> None:
-        self.builder_direction = None
+        self.builder_directions.clear()
         self.builder_buttons.clear()
         self._update_builder_visuals()
 
