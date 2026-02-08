@@ -142,6 +142,8 @@ class TekkenInputApp:
         self.emulator = KeyboardEmulator(self.log_queue)
         self.playback_thread: threading.Thread | None = None
         self.stop_event = threading.Event()
+        self.mapping_window: tk.Toplevel | None = None
+        self.mapping_text: tk.Text | None = None
 
         self._build_ui()
         self._poll_log()
@@ -151,6 +153,12 @@ class TekkenInputApp:
         main_frame.grid(row=0, column=0, sticky="nsew")
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
+
+        menubar = tk.Menu(self.root)
+        mapping_menu = tk.Menu(menubar, tearoff=False)
+        mapping_menu.add_command(label="Open Mapping Editor", command=self._open_mapping_editor)
+        menubar.add_cascade(label="Mapping", menu=mapping_menu)
+        self.root.config(menu=menubar)
 
         control_frame = ttk.LabelFrame(main_frame, text="Playback")
         control_frame.grid(row=0, column=0, sticky="ew")
@@ -173,29 +181,8 @@ class TekkenInputApp:
         ttk.Button(control_frame, text="Stop", command=self._stop_playback).grid(row=0, column=8, padx=4)
         ttk.Button(control_frame, text="Focus Window", command=self._focus_window).grid(row=0, column=9, padx=4)
 
-        frame_control = ttk.LabelFrame(main_frame, text="Frame Editor")
-        frame_control.grid(row=1, column=0, sticky="ew", pady=10)
-        frame_control.columnconfigure(5, weight=1)
-
-        ttk.Label(frame_control, text="Frame:").grid(row=0, column=0, padx=4, pady=4)
-        self.current_frame_var = tk.IntVar(value=0)
-        ttk.Entry(frame_control, textvariable=self.current_frame_var, width=8).grid(row=0, column=1)
-
-        ttk.Button(frame_control, text="Prev", command=self._prev_frame).grid(row=0, column=2, padx=4)
-        ttk.Button(frame_control, text="Next", command=self._next_frame).grid(row=0, column=3, padx=4)
-
-        ttk.Label(frame_control, text="P1 Notation:").grid(row=1, column=0, padx=4)
-        self.p1_entry = ttk.Entry(frame_control, width=30)
-        self.p1_entry.grid(row=1, column=1, columnspan=3, sticky="ew")
-        ttk.Button(frame_control, text="Set P1", command=lambda: self._set_frame_input(1)).grid(row=1, column=4, padx=4)
-
-        ttk.Label(frame_control, text="P2 Notation:").grid(row=2, column=0, padx=4)
-        self.p2_entry = ttk.Entry(frame_control, width=30)
-        self.p2_entry.grid(row=2, column=1, columnspan=3, sticky="ew")
-        ttk.Button(frame_control, text="Set P2", command=lambda: self._set_frame_input(2)).grid(row=2, column=4, padx=4)
-
         loop_frame = ttk.LabelFrame(main_frame, text="Looping")
-        loop_frame.grid(row=2, column=0, sticky="ew")
+        loop_frame.grid(row=1, column=0, sticky="ew")
         loop_frame.columnconfigure(3, weight=1)
         self.loop_enabled_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(loop_frame, text="Enable Loop", variable=self.loop_enabled_var).grid(row=0, column=0, padx=4, pady=4)
@@ -204,41 +191,41 @@ class TekkenInputApp:
         ttk.Entry(loop_frame, textvariable=self.loop_count_var, width=8).grid(row=0, column=2)
 
         focus_frame = ttk.LabelFrame(main_frame, text="Window Focus")
-        focus_frame.grid(row=3, column=0, sticky="ew", pady=10)
+        focus_frame.grid(row=2, column=0, sticky="ew", pady=10)
         focus_frame.columnconfigure(1, weight=1)
         ttk.Label(focus_frame, text="Window Title:").grid(row=0, column=0, padx=4, pady=4)
         self.window_title_var = tk.StringVar(value="TEKKEN™8")
         ttk.Entry(focus_frame, textvariable=self.window_title_var).grid(row=0, column=1, sticky="ew")
         ttk.Button(focus_frame, text="Focus", command=self._focus_window).grid(row=0, column=2, padx=4)
 
-        timeline_frame = ttk.LabelFrame(main_frame, text="Timeline (Frame : P1 | P2)")
-        timeline_frame.grid(row=4, column=0, sticky="nsew")
-        main_frame.rowconfigure(4, weight=1)
+        timeline_frame = ttk.LabelFrame(main_frame, text="Timeline (Frame | P1 | P2)")
+        timeline_frame.grid(row=3, column=0, sticky="nsew")
+        main_frame.rowconfigure(3, weight=1)
         timeline_frame.columnconfigure(0, weight=1)
 
-        self.timeline_list = tk.Listbox(timeline_frame, height=12)
-        self.timeline_list.grid(row=0, column=0, sticky="nsew")
+        self.timeline_tree = ttk.Treeview(
+            timeline_frame,
+            columns=("frame", "p1", "p2"),
+            show="headings",
+            height=12,
+        )
+        self.timeline_tree.heading("frame", text="Frame")
+        self.timeline_tree.heading("p1", text="P1 Input")
+        self.timeline_tree.heading("p2", text="P2 Input")
+        self.timeline_tree.column("frame", width=80, anchor="center", stretch=False)
+        self.timeline_tree.column("p1", width=240, anchor="w", stretch=True)
+        self.timeline_tree.column("p2", width=240, anchor="w", stretch=True)
+        self.timeline_tree.grid(row=0, column=0, sticky="nsew")
+        self.timeline_tree.bind("<Double-1>", self._start_edit_cell)
         timeline_frame.rowconfigure(0, weight=1)
 
-        mapping_frame = ttk.LabelFrame(main_frame, text="Input Mapping (JSON)")
-        mapping_frame.grid(row=5, column=0, sticky="nsew", pady=10)
-        mapping_frame.columnconfigure(0, weight=1)
-
-        self.mapping_text = tk.Text(mapping_frame, height=10)
-        self.mapping_text.grid(row=0, column=0, sticky="nsew")
-        mapping_frame.rowconfigure(0, weight=1)
-
-        ttk.Button(mapping_frame, text="Reload", command=self._reload_mapping).grid(row=1, column=0, sticky="w", padx=4, pady=4)
-        ttk.Button(mapping_frame, text="Save", command=self._save_mapping).grid(row=1, column=0, sticky="e", padx=4, pady=4)
-
         log_frame = ttk.LabelFrame(main_frame, text="Log")
-        log_frame.grid(row=6, column=0, sticky="nsew")
+        log_frame.grid(row=4, column=0, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         self.log_list = tk.Listbox(log_frame, height=8)
         self.log_list.grid(row=0, column=0, sticky="nsew")
 
-        self._reload_mapping()
         self._apply_total_frames()
 
     def _apply_total_frames(self) -> None:
@@ -247,33 +234,82 @@ class TekkenInputApp:
         self._refresh_timeline()
 
     def _refresh_timeline(self) -> None:
-        self.timeline_list.delete(0, tk.END)
+        for item in self.timeline_tree.get_children():
+            self.timeline_tree.delete(item)
         for idx, frame in enumerate(self.timeline.frames):
-            self.timeline_list.insert(tk.END, f"{idx:03d}: {frame.p1 or '-'} | {frame.p2 or '-'}")
+            self.timeline_tree.insert(
+                "",
+                tk.END,
+                values=(f"{idx:03d}", frame.p1, frame.p2),
+            )
 
-    def _set_frame_input(self, player: int) -> None:
-        frame_index = self.current_frame_var.get()
-        notation = self.p1_entry.get() if player == 1 else self.p2_entry.get()
-        self.timeline.set_input(frame_index, player, notation)
-        self._refresh_timeline()
+    def _start_edit_cell(self, event: tk.Event) -> None:
+        region = self.timeline_tree.identify("region", event.x, event.y)
+        if region != "cell":
+            return
+        item = self.timeline_tree.identify_row(event.y)
+        column = self.timeline_tree.identify_column(event.x)
+        if not item or column == "#1":
+            return
+        bbox = self.timeline_tree.bbox(item, column)
+        if not bbox:
+            return
+        x, y, width, height = bbox
+        value = self.timeline_tree.set(item, column)
+        entry = ttk.Entry(self.timeline_tree)
+        entry.place(x=x, y=y, width=width, height=height)
+        entry.insert(0, value)
+        entry.focus_set()
 
-    def _prev_frame(self) -> None:
-        current = max(0, self.current_frame_var.get() - 1)
-        self.current_frame_var.set(current)
-        self._load_frame_inputs(current)
+        def save_edit(_: tk.Event | None = None) -> None:
+            new_value = entry.get()
+            self.timeline_tree.set(item, column, new_value)
+            frame_str = self.timeline_tree.set(item, "frame")
+            frame_index = int(frame_str)
+            if column == "#2":
+                self.timeline.set_input(frame_index, 1, new_value)
+            elif column == "#3":
+                self.timeline.set_input(frame_index, 2, new_value)
+            entry.destroy()
 
-    def _next_frame(self) -> None:
-        current = min(len(self.timeline.frames) - 1, self.current_frame_var.get() + 1)
-        self.current_frame_var.set(current)
-        self._load_frame_inputs(current)
+        entry.bind("<Return>", save_edit)
+        entry.bind("<FocusOut>", save_edit)
 
-    def _load_frame_inputs(self, frame_index: int) -> None:
-        self.p1_entry.delete(0, tk.END)
-        self.p2_entry.delete(0, tk.END)
-        self.p1_entry.insert(0, self.timeline.get_input(frame_index, 1))
-        self.p2_entry.insert(0, self.timeline.get_input(frame_index, 2))
+    def _open_mapping_editor(self) -> None:
+        if self.mapping_window and tk.Toplevel.winfo_exists(self.mapping_window):
+            self.mapping_window.focus_set()
+            return
+        self.mapping_window = tk.Toplevel(self.root)
+        self.mapping_window.title("Input Mapping (JSON)")
+        self.mapping_window.geometry("480x360")
+        self.mapping_window.protocol("WM_DELETE_WINDOW", self._close_mapping_editor)
+
+        frame = ttk.Frame(self.mapping_window, padding=10)
+        frame.grid(row=0, column=0, sticky="nsew")
+        self.mapping_window.columnconfigure(0, weight=1)
+        self.mapping_window.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=1)
+
+        self.mapping_text = tk.Text(frame, height=12)
+        self.mapping_text.grid(row=0, column=0, sticky="nsew")
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=1, column=0, sticky="ew", pady=6)
+        ttk.Button(buttons, text="Reload", command=self._reload_mapping).grid(row=0, column=0, sticky="w", padx=4)
+        ttk.Button(buttons, text="Save", command=self._save_mapping).grid(row=0, column=1, sticky="w", padx=4)
+
+        self._reload_mapping()
+
+    def _close_mapping_editor(self) -> None:
+        if self.mapping_window:
+            self.mapping_window.destroy()
+        self.mapping_window = None
+        self.mapping_text = None
 
     def _reload_mapping(self) -> None:
+        if not self.mapping_text:
+            return
         try:
             self.mapper.load()
             self.mapping_text.delete("1.0", tk.END)
@@ -283,6 +319,8 @@ class TekkenInputApp:
             messagebox.showerror("Mapping Error", str(exc))
 
     def _save_mapping(self) -> None:
+        if not self.mapping_text:
+            return
         raw = self.mapping_text.get("1.0", tk.END).strip()
         try:
             self.mapper.save(raw)
