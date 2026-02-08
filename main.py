@@ -306,10 +306,9 @@ class TekkenInputApp:
         presets_frame.grid(row=0, column=1, sticky="ns", padx=(10, 0))
         presets_frame.columnconfigure(0, weight=1)
         ttk.Label(presets_frame, text="Drag preset to frame").grid(row=0, column=0, padx=4, pady=(4, 2))
-        self.preset_list = tk.Listbox(presets_frame, height=6, exportselection=False)
-        self.preset_list.insert(tk.END, "qcf")
-        self.preset_list.grid(row=1, column=0, padx=6, pady=4, sticky="nsew")
-        self.preset_list.bind("<ButtonPress-1>", self._start_preset_drag)
+        self.qcf_button = ttk.Button(presets_frame, text="QCF")
+        self.qcf_button.grid(row=1, column=0, padx=6, pady=6, sticky="ew")
+        self.qcf_button.bind("<ButtonPress-1>", lambda event: self._start_preset_drag(event, "qcf"))
 
         player_frame = ttk.Frame(presets_frame)
         player_frame.grid(row=2, column=0, padx=4, pady=4, sticky="ew")
@@ -373,11 +372,8 @@ class TekkenInputApp:
         entry.bind("<Return>", save_edit)
         entry.bind("<FocusOut>", save_edit)
 
-    def _start_preset_drag(self, event: tk.Event) -> None:
-        index = self.preset_list.nearest(event.y)
-        if index < 0:
-            return
-        self.active_preset = self.preset_list.get(index)
+    def _start_preset_drag(self, _: tk.Event, preset: str) -> None:
+        self.active_preset = preset
 
     def _handle_preset_drop(self, event: tk.Event) -> None:
         if not self.active_preset:
@@ -397,8 +393,14 @@ class TekkenInputApp:
         if preset != "qcf":
             return
         steps = ["d", "df", "f"]
+        max_frames = len(self.timeline.frames)
+        if max_frames == 0:
+            return
         for offset, step in enumerate(steps):
-            self.timeline.set_input(frame_index + offset, player, step)
+            target_index = frame_index + offset
+            if target_index >= max_frames:
+                break
+            self.timeline.set_input(target_index, player, step)
         self._refresh_timeline()
 
     def _open_mapping_editor(self) -> None:
