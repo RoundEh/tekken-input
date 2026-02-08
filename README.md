@@ -23,4 +23,5 @@ python main.py
 - For some games, `pydirectinput` works better than `pynput`. You can switch the backend in the Playback section.
 - Some anti-cheat or elevated games ignore synthetic input unless the tool is run with the same privileges (e.g., Run as Administrator).
 - Open the Mapping menu to edit `mapping.json` in a separate editor window (supports distinct `p1` and `p2` mappings).
+- Special key names like `up`, `down`, `left`, `right`, `insert`, `delete`, `home`, and `end` are supported for P2 mappings.
 - Window focus uses OS tools (Windows API, `osascript`, or `wmctrl`) and runs when playback starts. On Windows it matches window titles by substring (e.g., `TEKKEN™8`). If focus fails, click the game window manually.

@@ -160,6 +160,14 @@ class KeyboardEmulator:
             "space": " ",
             "enter": "\n",
             "tab": "\t",
+            "up": Key.up if Key else "up",
+            "down": Key.down if Key else "down",
+            "left": Key.left if Key else "left",
+            "right": Key.right if Key else "right",
+            "insert": Key.insert if Key else "insert",
+            "delete": Key.delete if Key else "delete",
+            "home": Key.home if Key else "home",
+            "end": Key.end if Key else "end",
         }
         return special.get(key, key)
 
