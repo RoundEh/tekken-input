@@ -1,18 +1,38 @@
 {
-  "directions": {
-    "u": "w",
-    "d": "s",
-    "b": "a",
-    "f": "d",
-    "uf": "w+d",
-    "ub": "w+a",
-    "df": "s+d",
-    "db": "s+a"
+  "p1": {
+    "directions": {
+      "u": "w",
+      "d": "s",
+      "b": "a",
+      "f": "d",
+      "uf": "w+d",
+      "ub": "w+a",
+      "df": "s+d",
+      "db": "s+a"
+    },
+    "buttons": {
+      "1": "u",
+      "2": "i",
+      "3": "j",
+      "4": "k"
+    }
   },
-  "buttons": {
-    "1": "j",
-    "2": "i",
-    "3": "k",
-    "4": "l"
+  "p2": {
+    "directions": {
+      "u": "up",
+      "d": "down",
+      "b": "left",
+      "f": "right",
+      "uf": "up+right",
+      "ub": "up+left",
+      "df": "down+right",
+      "db": "down+left"
+    },
+    "buttons": {
+      "1": "insert",
+      "2": "home",
+      "3": "delete",
+      "4": "end"
+    }
   }
 }

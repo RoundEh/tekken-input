@@ -65,17 +65,24 @@ class Timeline:
 class InputMapper:
     def __init__(self, mapping_path: str = MAPPING_PATH) -> None:
         self.mapping_path = mapping_path
-        self.mapping = {"directions": {}, "buttons": {}}
+        self.mapping = {"p1": {"directions": {}, "buttons": {}}, "p2": {"directions": {}, "buttons": {}}}
         self.load()
 
     def load(self) -> None:
         try:
             with open(self.mapping_path, "r", encoding="utf-8") as file:
-                self.mapping = json.load(file)
+                loaded = json.load(file)
         except FileNotFoundError:
-            self.mapping = {"directions": {}, "buttons": {}}
+            loaded = {}
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid mapping JSON: {exc}") from exc
+        if "p1" in loaded or "p2" in loaded:
+            self.mapping = loaded
+        else:
+            self.mapping = {
+                "p1": loaded or {"directions": {}, "buttons": {}},
+                "p2": loaded or {"directions": {}, "buttons": {}},
+            }
 
     def save(self, raw_text: str) -> None:
         parsed = json.loads(raw_text)
@@ -83,9 +90,11 @@ class InputMapper:
         with open(self.mapping_path, "w", encoding="utf-8") as file:
             json.dump(self.mapping, file, indent=2)
 
-    def resolve_key(self, token: str) -> list[str]:
-        directions = self.mapping.get("directions", {})
-        buttons = self.mapping.get("buttons", {})
+    def resolve_key(self, token: str, player: int) -> list[str]:
+        player_key = "p1" if player == 1 else "p2"
+        player_map = self.mapping.get(player_key, {})
+        directions = player_map.get("directions", {})
+        buttons = player_map.get("buttons", {})
         if token in directions:
             return directions[token].split("+")
         if token in buttons:
@@ -137,7 +146,7 @@ class TekkenNotationParser:
     def __init__(self, mapper: InputMapper) -> None:
         self.mapper = mapper
 
-    def parse(self, notation: str) -> list[list[str]]:
+    def parse(self, notation: str, player: int) -> list[list[str]]:
         if not notation:
             return []
         steps = [step.strip() for step in notation.replace(" ", "").split(",") if step.strip()]
@@ -146,7 +155,7 @@ class TekkenNotationParser:
             tokens = [token for token in step.split("+") if token]
             keys = []
             for token in tokens:
-                token_keys = self.mapper.resolve_key(token)
+                token_keys = self.mapper.resolve_key(token, player)
                 if not token_keys:
                     token_keys = [token]
                 keys.extend(token_keys)
@@ -485,8 +494,8 @@ class TekkenInputApp:
         return result == 0
 
     def _emit_inputs(self, frame: FrameInput) -> None:
-        for label, notation in (("P1", frame.p1), ("P2", frame.p2)):
-            steps = self.parser.parse(notation)
+        for label, player, notation in (("P1", 1, frame.p1), ("P2", 2, frame.p2)):
+            steps = self.parser.parse(notation, player)
             if not steps:
                 continue
             for step in steps:
