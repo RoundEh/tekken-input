@@ -1,8 +1,11 @@
 import json
+import os
 import queue
 import threading
 import time
 import tkinter as tk
+from sys import platform
+import ctypes.wintypes
 from dataclasses import dataclass, field
 from tkinter import messagebox, ttk
 
@@ -151,7 +154,7 @@ class TekkenInputApp:
 
         control_frame = ttk.LabelFrame(main_frame, text="Playback")
         control_frame.grid(row=0, column=0, sticky="ew")
-        control_frame.columnconfigure(7, weight=1)
+        control_frame.columnconfigure(9, weight=1)
 
         ttk.Label(control_frame, text="FPS:").grid(row=0, column=0, padx=4, pady=4)
         self.fps_var = tk.IntVar(value=DEFAULT_FPS)
@@ -161,9 +164,14 @@ class TekkenInputApp:
         self.total_frames_var = tk.IntVar(value=60)
         ttk.Entry(control_frame, textvariable=self.total_frames_var, width=8).grid(row=0, column=3)
 
-        ttk.Button(control_frame, text="Apply", command=self._apply_total_frames).grid(row=0, column=4, padx=4)
-        ttk.Button(control_frame, text="Play", command=self._start_playback).grid(row=0, column=5, padx=4)
-        ttk.Button(control_frame, text="Stop", command=self._stop_playback).grid(row=0, column=6, padx=4)
+        ttk.Label(control_frame, text="Startup Delay (s):").grid(row=0, column=4, padx=4)
+        self.start_delay_var = tk.DoubleVar(value=0.0)
+        ttk.Entry(control_frame, textvariable=self.start_delay_var, width=8).grid(row=0, column=5)
+
+        ttk.Button(control_frame, text="Apply", command=self._apply_total_frames).grid(row=0, column=6, padx=4)
+        ttk.Button(control_frame, text="Play", command=self._start_playback).grid(row=0, column=7, padx=4)
+        ttk.Button(control_frame, text="Stop", command=self._stop_playback).grid(row=0, column=8, padx=4)
+        ttk.Button(control_frame, text="Focus Window", command=self._focus_window).grid(row=0, column=9, padx=4)
 
         frame_control = ttk.LabelFrame(main_frame, text="Frame Editor")
         frame_control.grid(row=1, column=0, sticky="ew", pady=10)
@@ -186,9 +194,26 @@ class TekkenInputApp:
         self.p2_entry.grid(row=2, column=1, columnspan=3, sticky="ew")
         ttk.Button(frame_control, text="Set P2", command=lambda: self._set_frame_input(2)).grid(row=2, column=4, padx=4)
 
+        loop_frame = ttk.LabelFrame(main_frame, text="Looping")
+        loop_frame.grid(row=2, column=0, sticky="ew")
+        loop_frame.columnconfigure(3, weight=1)
+        self.loop_enabled_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(loop_frame, text="Enable Loop", variable=self.loop_enabled_var).grid(row=0, column=0, padx=4, pady=4)
+        ttk.Label(loop_frame, text="Loop Count (0=infinite):").grid(row=0, column=1, padx=4)
+        self.loop_count_var = tk.IntVar(value=0)
+        ttk.Entry(loop_frame, textvariable=self.loop_count_var, width=8).grid(row=0, column=2)
+
+        focus_frame = ttk.LabelFrame(main_frame, text="Window Focus")
+        focus_frame.grid(row=3, column=0, sticky="ew", pady=10)
+        focus_frame.columnconfigure(1, weight=1)
+        ttk.Label(focus_frame, text="Window Title:").grid(row=0, column=0, padx=4, pady=4)
+        self.window_title_var = tk.StringVar(value="Tekken 8")
+        ttk.Entry(focus_frame, textvariable=self.window_title_var).grid(row=0, column=1, sticky="ew")
+        ttk.Button(focus_frame, text="Focus", command=self._focus_window).grid(row=0, column=2, padx=4)
+
         timeline_frame = ttk.LabelFrame(main_frame, text="Timeline (Frame : P1 | P2)")
-        timeline_frame.grid(row=2, column=0, sticky="nsew")
-        main_frame.rowconfigure(2, weight=1)
+        timeline_frame.grid(row=4, column=0, sticky="nsew")
+        main_frame.rowconfigure(4, weight=1)
         timeline_frame.columnconfigure(0, weight=1)
 
         self.timeline_list = tk.Listbox(timeline_frame, height=12)
@@ -196,7 +221,7 @@ class TekkenInputApp:
         timeline_frame.rowconfigure(0, weight=1)
 
         mapping_frame = ttk.LabelFrame(main_frame, text="Input Mapping (JSON)")
-        mapping_frame.grid(row=3, column=0, sticky="nsew", pady=10)
+        mapping_frame.grid(row=5, column=0, sticky="nsew", pady=10)
         mapping_frame.columnconfigure(0, weight=1)
 
         self.mapping_text = tk.Text(mapping_frame, height=10)
@@ -207,7 +232,7 @@ class TekkenInputApp:
         ttk.Button(mapping_frame, text="Save", command=self._save_mapping).grid(row=1, column=0, sticky="e", padx=4, pady=4)
 
         log_frame = ttk.LabelFrame(main_frame, text="Log")
-        log_frame.grid(row=4, column=0, sticky="nsew")
+        log_frame.grid(row=6, column=0, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         self.log_list = tk.Listbox(log_frame, height=8)
@@ -279,14 +304,76 @@ class TekkenInputApp:
     def _playback_loop(self) -> None:
         fps = max(1, self.fps_var.get())
         frame_duration = 1.0 / fps
+        start_delay = max(0.0, self.start_delay_var.get())
+        loop_enabled = self.loop_enabled_var.get()
+        loop_count = max(0, self.loop_count_var.get())
+        loop_target = loop_count if loop_enabled else 1
+
+        if start_delay:
+            self._log(f"Startup delay: {start_delay:.2f}s")
+            time.sleep(start_delay)
+
+        loops_done = 0
         self._log(f"Playback started at {fps} FPS")
-        for idx, frame in enumerate(self.timeline.frames):
-            if self.stop_event.is_set():
+        while not self.stop_event.is_set():
+            loops_done += 1
+            self._log(f"Loop {loops_done}")
+            for idx, frame in enumerate(self.timeline.frames):
+                if self.stop_event.is_set():
+                    break
+                self._log(f"Frame {idx:03d} -> P1: {frame.p1 or '-'} | P2: {frame.p2 or '-'}")
+                self._emit_inputs(frame)
+                time.sleep(frame_duration)
+            if not loop_enabled:
                 break
-            self._log(f"Frame {idx:03d} -> P1: {frame.p1 or '-'} | P2: {frame.p2 or '-'}")
-            self._emit_inputs(frame)
-            time.sleep(frame_duration)
+            if loop_target and loops_done >= loop_target:
+                break
         self._log("Playback finished")
+
+    def _focus_window(self) -> None:
+        title = self.window_title_var.get().strip()
+        if not title:
+            messagebox.showwarning("Focus Window", "Please provide a window title.")
+            return
+        if platform.startswith("win"):
+            success = self._focus_window_windows(title)
+        elif platform == "darwin":
+            success = self._focus_window_macos(title)
+        else:
+            success = self._focus_window_linux(title)
+        if success:
+            self._log(f"Focused window: {title}")
+        else:
+            self._log(f"Failed to focus window: {title}")
+            messagebox.showwarning(
+                "Focus Window",
+                "Unable to focus the window automatically. Try clicking the game window manually.",
+            )
+
+    def _focus_window_windows(self, title: str) -> bool:
+        try:
+            import ctypes
+        except ImportError:
+            return False
+
+        user32 = ctypes.windll.user32
+        user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]  # type: ignore[attr-defined]
+        user32.FindWindowW.argtypes = [ctypes.wintypes.LPCWSTR, ctypes.wintypes.LPCWSTR]  # type: ignore[attr-defined]
+        handle = user32.FindWindowW(None, title)
+        if handle == 0:
+            return False
+        return bool(user32.SetForegroundWindow(handle))
+
+    def _focus_window_macos(self, title: str) -> bool:
+        script = f'tell application "System Events" to set frontmost of the first process whose name is "{title}" to true'
+        result = os.system(f"osascript -e '{script}'")
+        return result == 0
+
+    def _focus_window_linux(self, title: str) -> bool:
+        if os.system("command -v wmctrl >/dev/null 2>&1") != 0:
+            return False
+        result = os.system(f"wmctrl -a '{title}'")
+        return result == 0
 
     def _emit_inputs(self, frame: FrameInput) -> None:
         for label, notation in (("P1", frame.p1), ("P2", frame.p2)):
