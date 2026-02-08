@@ -44,17 +44,17 @@ class FrameInput:
 class Timeline:
     frames: list[FrameInput] = field(default_factory=list)
 
-    def ensure_length(self, length: int) -> None:
+    def ensure_length(self, length: int, allow_shrink: bool = True) -> None:
         if length < 0:
             return
-        if len(self.frames) > length:
+        if allow_shrink and len(self.frames) > length:
             self.frames = self.frames[:length]
             return
         while len(self.frames) < length:
             self.frames.append(FrameInput())
 
     def set_input(self, frame_index: int, player: int, notation: str) -> None:
-        self.ensure_length(frame_index + 1)
+        self.ensure_length(frame_index + 1, allow_shrink=False)
         if player == 1:
             self.frames[frame_index].p1 = notation
         else:
@@ -209,6 +209,8 @@ class TekkenInputApp:
         self.backend_var = tk.StringVar(value="pynput")
         self.preset_player_var = tk.IntVar(value=1)
         self.active_preset: str | None = None
+        self.drag_indicator: tk.Toplevel | None = None
+        self.drag_label: tk.Label | None = None
 
         self._build_ui()
         self._poll_log()
@@ -300,15 +302,18 @@ class TekkenInputApp:
         self.timeline_tree.column("p2", width=240, anchor="w", stretch=True)
         self.timeline_tree.grid(row=0, column=0, sticky="nsew")
         self.timeline_tree.bind("<Double-1>", self._start_edit_cell)
-        self.timeline_tree.bind("<ButtonRelease-1>", self._handle_preset_drop)
 
         presets_frame = ttk.LabelFrame(content_frame, text="Presets")
         presets_frame.grid(row=0, column=1, sticky="ns", padx=(10, 0))
         presets_frame.columnconfigure(0, weight=1)
         ttk.Label(presets_frame, text="Drag preset to frame").grid(row=0, column=0, padx=4, pady=(4, 2))
-        self.qcf_button = ttk.Button(presets_frame, text="QCF")
-        self.qcf_button.grid(row=1, column=0, padx=6, pady=6, sticky="ew")
-        self.qcf_button.bind("<ButtonPress-1>", lambda event: self._start_preset_drag(event, "qcf"))
+        self.qcf_canvas = tk.Canvas(presets_frame, width=80, height=40, highlightthickness=0)
+        self.qcf_canvas.grid(row=1, column=0, padx=6, pady=6)
+        self.qcf_canvas.create_rectangle(5, 5, 75, 35, fill="#2b2b2b", outline="#444")
+        self.qcf_canvas.create_text(40, 20, text="QCF", fill="#ffffff")
+        self.qcf_canvas.bind("<ButtonPress-1>", lambda event: self._start_preset_drag(event, "qcf"))
+        self.qcf_canvas.bind("<B1-Motion>", self._update_preset_drag)
+        self.qcf_canvas.bind("<ButtonRelease-1>", self._end_preset_drag)
 
         player_frame = ttk.Frame(presets_frame)
         player_frame.grid(row=2, column=0, padx=4, pady=4, sticky="ew")
@@ -372,13 +377,65 @@ class TekkenInputApp:
         entry.bind("<Return>", save_edit)
         entry.bind("<FocusOut>", save_edit)
 
-    def _start_preset_drag(self, _: tk.Event, preset: str) -> None:
+    def _start_preset_drag(self, event: tk.Event, preset: str) -> None:
         self.active_preset = preset
+        self._start_drag_indicator(event)
+
+    def _start_drag_indicator(self, event: tk.Event) -> None:
+        if self.drag_indicator:
+            self.drag_indicator.destroy()
+        self.drag_indicator = tk.Toplevel(self.root)
+        self.drag_indicator.overrideredirect(True)
+        self.drag_indicator.attributes("-topmost", True)
+        self.drag_label = tk.Label(
+            self.drag_indicator,
+            text=self.active_preset.upper() if self.active_preset else "",
+            bg="#2b2b2b",
+            fg="#ffffff",
+            padx=12,
+            pady=6,
+        )
+        self.drag_label.pack()
+        self._move_drag_indicator(event.x_root, event.y_root)
+
+    def _move_drag_indicator(self, x_root: int, y_root: int) -> None:
+        if not self.drag_indicator:
+            return
+        self.drag_indicator.geometry(f"+{x_root + 10}+{y_root + 10}")
+
+    def _update_preset_drag(self, event: tk.Event) -> None:
+        if not self.active_preset:
+            return
+        self._move_drag_indicator(event.x_root, event.y_root)
+
+    def _end_preset_drag(self, event: tk.Event) -> None:
+        if not self.active_preset:
+            return
+        self._try_drop_preset(event.x_root, event.y_root)
+        if self.drag_indicator:
+            self.drag_indicator.destroy()
+        self.drag_indicator = None
+        self.drag_label = None
+        self.active_preset = None
 
     def _handle_preset_drop(self, event: tk.Event) -> None:
         if not self.active_preset:
             return
-        row_id = self.timeline_tree.identify_row(event.y)
+        self._try_drop_preset(event.x_root, event.y_root)
+        self.active_preset = None
+
+    def _try_drop_preset(self, x_root: int, y_root: int) -> None:
+        widget = self.root.winfo_containing(x_root, y_root)
+        if widget is None:
+            return
+        if widget is not self.timeline_tree:
+            parent = widget
+            while parent is not None and parent is not self.timeline_tree:
+                parent = parent.master  # type: ignore[assignment]
+            if parent is not self.timeline_tree:
+                return
+        y_local = y_root - self.timeline_tree.winfo_rooty()
+        row_id = self.timeline_tree.identify_row(y_local)
         if not row_id:
             return
         frame_str = self.timeline_tree.set(row_id, "frame")
@@ -387,7 +444,6 @@ class TekkenInputApp:
         frame_index = int(frame_str)
         player = self.preset_player_var.get()
         self._apply_preset_to_frame(self.active_preset, frame_index, player)
-        self.active_preset = None
 
     def _apply_preset_to_frame(self, preset: str, frame_index: int, player: int) -> None:
         if preset != "qcf":
