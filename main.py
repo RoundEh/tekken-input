@@ -587,11 +587,14 @@ class TekkenInputApp:
         while not self.stop_event.is_set():
             loops_done += 1
             self._log(f"Loop {loops_done}")
+            loop_start = time.perf_counter()
             for idx, frame in enumerate(self.timeline.frames):
                 if self.stop_event.is_set():
                     break
+                frame_start = loop_start + (idx * frame_duration)
+                self._sleep_until(frame_start)
                 self._log(f"Frame {idx:03d} -> P1: {frame.p1 or '-'} | P2: {frame.p2 or '-'}")
-                self._emit_inputs(frame, frame_duration)
+                self._emit_inputs(frame, frame_start + frame_duration)
             if not loop_enabled:
                 break
             if loop_target and loops_done >= loop_target:
@@ -670,7 +673,7 @@ class TekkenInputApp:
         result = os.system(f"wmctrl -a '{title}'")
         return result == 0
 
-    def _emit_inputs(self, frame: FrameInput, frame_duration: float) -> None:
+    def _emit_inputs(self, frame: FrameInput, frame_end: float) -> None:
         keys_to_press: list[str] = []
         for label, player, notation in (("P1", 1, frame.p1), ("P2", 2, frame.p2)):
             steps = self.parser.parse(notation, player)
@@ -683,10 +686,18 @@ class TekkenInputApp:
             keys_to_press.extend(step)
         if keys_to_press:
             self.emulator.key_down(keys_to_press)
-            time.sleep(frame_duration)
+            self._sleep_until(frame_end)
             self.emulator.key_up(keys_to_press)
         else:
-            time.sleep(frame_duration)
+            self._sleep_until(frame_end)
+
+    def _sleep_until(self, target_time: float) -> None:
+        while not self.stop_event.is_set():
+            now = time.perf_counter()
+            remaining = target_time - now
+            if remaining <= 0:
+                return
+            time.sleep(min(remaining, 0.002))
 
     def _log(self, message: str) -> None:
         self.log_queue.put(message)
