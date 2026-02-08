@@ -251,7 +251,7 @@ class TekkenInputApp:
         ttk.Entry(control_frame, textvariable=self.total_frames_var, width=8).grid(row=0, column=3)
 
         ttk.Label(control_frame, text="Startup Delay (s):").grid(row=0, column=4, padx=4)
-        self.start_delay_var = tk.DoubleVar(value=0.0)
+        self.start_delay_var = tk.DoubleVar(value=1.0)
         ttk.Entry(control_frame, textvariable=self.start_delay_var, width=8).grid(row=0, column=5)
 
         ttk.Label(control_frame, text="Backend:").grid(row=0, column=6, padx=4)
@@ -267,7 +267,8 @@ class TekkenInputApp:
         ttk.Button(control_frame, text="Apply", command=self._apply_total_frames).grid(row=0, column=8, padx=4)
         ttk.Button(control_frame, text="Play", command=self._start_playback).grid(row=0, column=9, padx=4)
         ttk.Button(control_frame, text="Stop", command=self._stop_playback).grid(row=0, column=10, padx=4)
-        ttk.Button(control_frame, text="Focus Window", command=self._focus_window).grid(row=0, column=11, padx=4)
+        ttk.Button(control_frame, text="Clear Timeline", command=self._clear_timeline).grid(row=0, column=11, padx=4)
+        ttk.Button(control_frame, text="Focus Window", command=self._focus_window).grid(row=0, column=12, padx=4)
 
         loop_frame = ttk.LabelFrame(main_frame, text="Looping")
         loop_frame.grid(row=1, column=0, sticky="ew")
@@ -350,6 +351,12 @@ class TekkenInputApp:
     def _apply_total_frames(self) -> None:
         total = max(1, self.total_frames_var.get())
         self.timeline.ensure_length(total)
+        self._refresh_timeline()
+
+    def _clear_timeline(self) -> None:
+        for frame in self.timeline.frames:
+            frame.p1 = ""
+            frame.p2 = ""
         self._refresh_timeline()
 
     def _refresh_timeline(self) -> None:

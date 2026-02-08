@@ -9,10 +9,11 @@ A simple frame-by-frame input tool for Tekken-style notation with two-player sup
 - Input mapping to keyboard keys
 - Keyboard emulation (via `pynput` if available; otherwise logs actions)
 - Basic GUI (Tkinter) with editable timeline columns
-- Startup delay, looping playback, and auto window focusing on play
+- Startup delay (defaults to 1s), looping playback, and auto window focusing on play
 - Selectable input backend (pynput, pydirectinput, or log-only)
 - Inputs are pressed for one frame by default, then released on the next frame (use separate frames for multi-step combos)
 - Drag preset blocks (`QCF`, `QCB`, `EWGF`, `CROUCHDASH`) onto the P1 or P2 column to fill predefined multi-frame inputs (e.g., `QCF` = `d`, `df`, `f`; `QCB` = `d`, `db`, `b`; `EWGF` = `f`, neutral, `d`, `df+2`; `CROUCHDASH` = `f`, neutral, `d`, `df`) without extending the total frame count.
+- Clear Timeline button to wipe all frame inputs without changing the frame count.
 
 ## Run
 ```bash
