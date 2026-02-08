@@ -12,6 +12,7 @@ A simple frame-by-frame input tool for Tekken-style notation with two-player sup
 - Startup delay, looping playback, and auto window focusing on play
 - Selectable input backend (pynput, pydirectinput, or log-only)
 - Inputs are pressed for one frame by default, then released on the next frame (use separate frames for multi-step combos)
+- Drag the `qcf` preset onto a frame to fill `d`, `df`, `f` across consecutive frames.
 
 ## Run
 ```bash

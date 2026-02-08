@@ -207,6 +207,8 @@ class TekkenInputApp:
         self.mapping_window: tk.Toplevel | None = None
         self.mapping_text: tk.Text | None = None
         self.backend_var = tk.StringVar(value="pynput")
+        self.preset_player_var = tk.IntVar(value=1)
+        self.active_preset: str | None = None
 
         self._build_ui()
         self._poll_log()
@@ -276,8 +278,16 @@ class TekkenInputApp:
         main_frame.rowconfigure(3, weight=1)
         timeline_frame.columnconfigure(0, weight=1)
 
+        content_frame = ttk.Frame(timeline_frame)
+        content_frame.grid(row=0, column=0, sticky="nsew")
+        timeline_frame.rowconfigure(0, weight=1)
+        timeline_frame.columnconfigure(0, weight=1)
+        content_frame.columnconfigure(0, weight=1)
+        content_frame.columnconfigure(1, weight=0)
+        content_frame.rowconfigure(0, weight=1)
+
         self.timeline_tree = ttk.Treeview(
-            timeline_frame,
+            content_frame,
             columns=("frame", "p1", "p2"),
             show="headings",
             height=12,
@@ -290,7 +300,22 @@ class TekkenInputApp:
         self.timeline_tree.column("p2", width=240, anchor="w", stretch=True)
         self.timeline_tree.grid(row=0, column=0, sticky="nsew")
         self.timeline_tree.bind("<Double-1>", self._start_edit_cell)
-        timeline_frame.rowconfigure(0, weight=1)
+        self.timeline_tree.bind("<ButtonRelease-1>", self._handle_preset_drop)
+
+        presets_frame = ttk.LabelFrame(content_frame, text="Presets")
+        presets_frame.grid(row=0, column=1, sticky="ns", padx=(10, 0))
+        presets_frame.columnconfigure(0, weight=1)
+        ttk.Label(presets_frame, text="Drag preset to frame").grid(row=0, column=0, padx=4, pady=(4, 2))
+        self.preset_list = tk.Listbox(presets_frame, height=6, exportselection=False)
+        self.preset_list.insert(tk.END, "qcf")
+        self.preset_list.grid(row=1, column=0, padx=6, pady=4, sticky="nsew")
+        self.preset_list.bind("<ButtonPress-1>", self._start_preset_drag)
+
+        player_frame = ttk.Frame(presets_frame)
+        player_frame.grid(row=2, column=0, padx=4, pady=4, sticky="ew")
+        ttk.Label(player_frame, text="Target:").grid(row=0, column=0, sticky="w")
+        ttk.Radiobutton(player_frame, text="P1", variable=self.preset_player_var, value=1).grid(row=0, column=1)
+        ttk.Radiobutton(player_frame, text="P2", variable=self.preset_player_var, value=2).grid(row=0, column=2)
 
         log_frame = ttk.LabelFrame(main_frame, text="Log")
         log_frame.grid(row=4, column=0, sticky="nsew")
@@ -347,6 +372,34 @@ class TekkenInputApp:
 
         entry.bind("<Return>", save_edit)
         entry.bind("<FocusOut>", save_edit)
+
+    def _start_preset_drag(self, event: tk.Event) -> None:
+        index = self.preset_list.nearest(event.y)
+        if index < 0:
+            return
+        self.active_preset = self.preset_list.get(index)
+
+    def _handle_preset_drop(self, event: tk.Event) -> None:
+        if not self.active_preset:
+            return
+        row_id = self.timeline_tree.identify_row(event.y)
+        if not row_id:
+            return
+        frame_str = self.timeline_tree.set(row_id, "frame")
+        if not frame_str:
+            return
+        frame_index = int(frame_str)
+        player = self.preset_player_var.get()
+        self._apply_preset_to_frame(self.active_preset, frame_index, player)
+        self.active_preset = None
+
+    def _apply_preset_to_frame(self, preset: str, frame_index: int, player: int) -> None:
+        if preset != "qcf":
+            return
+        steps = ["d", "df", "f"]
+        for offset, step in enumerate(steps):
+            self.timeline.set_input(frame_index + offset, player, step)
+        self._refresh_timeline()
 
     def _open_mapping_editor(self) -> None:
         if self.mapping_window and tk.Toplevel.winfo_exists(self.mapping_window):
