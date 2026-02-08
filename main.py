@@ -45,6 +45,11 @@ class Timeline:
     frames: list[FrameInput] = field(default_factory=list)
 
     def ensure_length(self, length: int) -> None:
+        if length < 0:
+            return
+        if len(self.frames) > length:
+            self.frames = self.frames[:length]
+            return
         while len(self.frames) < length:
             self.frames.append(FrameInput())
 
