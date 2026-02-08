@@ -19,6 +19,14 @@ except ImportError:  # pragma: no cover - optional dependency
     Key = None
     PYNPUT_AVAILABLE = False
 
+try:
+    import pydirectinput
+
+    PYDIRECT_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency
+    pydirectinput = None
+    PYDIRECT_AVAILABLE = False
+
 
 DEFAULT_FPS = 60
 MAPPING_PATH = "mapping.json"
@@ -89,17 +97,32 @@ class KeyboardEmulator:
     def __init__(self, log_queue: queue.Queue[str]) -> None:
         self.log_queue = log_queue
         self.controller = KeyboardController() if PYNPUT_AVAILABLE else None
+        self.mode = "pynput"
 
     def press_keys(self, keys: list[str]) -> None:
         if not keys:
             return
-        if not PYNPUT_AVAILABLE:
-            self.log_queue.put(f"[NO EMU] Press: {keys}")
+        if self.mode == "pydirectinput":
+            if not PYDIRECT_AVAILABLE:
+                self.log_queue.put("[NO EMU] pydirectinput not installed.")
+                self.log_queue.put(f"[NO EMU] Press: {keys}")
+                return
+            for key in keys:
+                pydirectinput.keyDown(self._convert_key(key))
+            for key in keys:
+                pydirectinput.keyUp(self._convert_key(key))
             return
-        for key in keys:
-            self.controller.press(self._convert_key(key))
-        for key in keys:
-            self.controller.release(self._convert_key(key))
+        if self.mode == "pynput":
+            if not PYNPUT_AVAILABLE:
+                self.log_queue.put("[NO EMU] pynput not installed.")
+                self.log_queue.put(f"[NO EMU] Press: {keys}")
+                return
+            for key in keys:
+                self.controller.press(self._convert_key(key))
+            for key in keys:
+                self.controller.release(self._convert_key(key))
+            return
+        self.log_queue.put(f"[LOG ONLY] Press: {keys}")
 
     def _convert_key(self, key: str):
         special = {
@@ -144,6 +167,7 @@ class TekkenInputApp:
         self.stop_event = threading.Event()
         self.mapping_window: tk.Toplevel | None = None
         self.mapping_text: tk.Text | None = None
+        self.backend_var = tk.StringVar(value="pynput")
 
         self._build_ui()
         self._poll_log()
@@ -162,7 +186,7 @@ class TekkenInputApp:
 
         control_frame = ttk.LabelFrame(main_frame, text="Playback")
         control_frame.grid(row=0, column=0, sticky="ew")
-        control_frame.columnconfigure(9, weight=1)
+        control_frame.columnconfigure(12, weight=1)
 
         ttk.Label(control_frame, text="FPS:").grid(row=0, column=0, padx=4, pady=4)
         self.fps_var = tk.IntVar(value=DEFAULT_FPS)
@@ -176,10 +200,20 @@ class TekkenInputApp:
         self.start_delay_var = tk.DoubleVar(value=0.0)
         ttk.Entry(control_frame, textvariable=self.start_delay_var, width=8).grid(row=0, column=5)
 
-        ttk.Button(control_frame, text="Apply", command=self._apply_total_frames).grid(row=0, column=6, padx=4)
-        ttk.Button(control_frame, text="Play", command=self._start_playback).grid(row=0, column=7, padx=4)
-        ttk.Button(control_frame, text="Stop", command=self._stop_playback).grid(row=0, column=8, padx=4)
-        ttk.Button(control_frame, text="Focus Window", command=self._focus_window).grid(row=0, column=9, padx=4)
+        ttk.Label(control_frame, text="Backend:").grid(row=0, column=6, padx=4)
+        backend_menu = ttk.Combobox(
+            control_frame,
+            textvariable=self.backend_var,
+            values=("pynput", "pydirectinput", "log"),
+            width=12,
+            state="readonly",
+        )
+        backend_menu.grid(row=0, column=7, padx=4)
+
+        ttk.Button(control_frame, text="Apply", command=self._apply_total_frames).grid(row=0, column=8, padx=4)
+        ttk.Button(control_frame, text="Play", command=self._start_playback).grid(row=0, column=9, padx=4)
+        ttk.Button(control_frame, text="Stop", command=self._stop_playback).grid(row=0, column=10, padx=4)
+        ttk.Button(control_frame, text="Focus Window", command=self._focus_window).grid(row=0, column=11, padx=4)
 
         loop_frame = ttk.LabelFrame(main_frame, text="Looping")
         loop_frame.grid(row=1, column=0, sticky="ew")
@@ -331,6 +365,7 @@ class TekkenInputApp:
     def _start_playback(self) -> None:
         if self.playback_thread and self.playback_thread.is_alive():
             return
+        self._apply_backend()
         self._focus_window(auto=True)
         self.stop_event.clear()
         self.playback_thread = threading.Thread(target=self._playback_loop, daemon=True)
@@ -339,6 +374,14 @@ class TekkenInputApp:
     def _stop_playback(self) -> None:
         self.stop_event.set()
         self._log("Playback stopped")
+
+    def _apply_backend(self) -> None:
+        backend = self.backend_var.get()
+        self.emulator.mode = backend
+        if backend == "pydirectinput" and not PYDIRECT_AVAILABLE:
+            self._log("pydirectinput not available; falling back to log-only.")
+        elif backend == "pynput" and not PYNPUT_AVAILABLE:
+            self._log("pynput not available; falling back to log-only.")
 
     def _playback_loop(self) -> None:
         fps = max(1, self.fps_var.get())
@@ -399,10 +442,35 @@ class TekkenInputApp:
 
         user32 = ctypes.windll.user32
         user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]  # type: ignore[attr-defined]
-        user32.FindWindowW.argtypes = [ctypes.wintypes.LPCWSTR, ctypes.wintypes.LPCWSTR]  # type: ignore[attr-defined]
-        handle = user32.FindWindowW(None, title)
-        if handle == 0:
+        user32.EnumWindows.argtypes = [ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM), ctypes.wintypes.LPARAM]  # type: ignore[attr-defined]
+        user32.GetWindowTextW.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.LPWSTR, ctypes.c_int]  # type: ignore[attr-defined]
+        user32.IsWindowVisible.argtypes = [ctypes.wintypes.HWND]  # type: ignore[attr-defined]
+        user32.ShowWindow.argtypes = [ctypes.wintypes.HWND, ctypes.c_int]  # type: ignore[attr-defined]
+
+        matches: list[int] = []
+        title_lower = title.lower()
+
+        def enum_handler(hwnd, _):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length == 0:
+                return True
+            buffer = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buffer, length + 1)
+            window_title = buffer.value
+            if title_lower in window_title.lower():
+                matches.append(hwnd)
+                return False
+            return True
+
+        enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)(enum_handler)
+        user32.EnumWindows(enum_proc, 0)
+
+        if not matches:
             return False
+        handle = matches[0]
+        user32.ShowWindow(handle, 5)
         return bool(user32.SetForegroundWindow(handle))
 
     def _focus_window_macos(self, title: str) -> bool:

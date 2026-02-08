@@ -10,6 +10,7 @@ A simple frame-by-frame input tool for Tekken-style notation with two-player sup
 - Keyboard emulation (via `pynput` if available; otherwise logs actions)
 - Basic GUI (Tkinter) with editable timeline columns
 - Startup delay, looping playback, and auto window focusing on play
+- Selectable input backend (pynput, pydirectinput, or log-only)
 
 ## Run
 ```bash
@@ -18,5 +19,7 @@ python main.py
 
 ## Notes
 - The app attempts to use `pynput` for keyboard emulation. If unavailable, it will log the intended key presses instead.
+- For some games, `pydirectinput` works better than `pynput`. You can switch the backend in the Playback section.
+- Some anti-cheat or elevated games ignore synthetic input unless the tool is run with the same privileges (e.g., Run as Administrator).
 - Open the Mapping menu to edit `mapping.json` in a separate editor window.
-- Window focus uses OS tools (Windows API, `osascript`, or `wmctrl`) and runs when playback starts. If unavailable, click the game window manually.
+- Window focus uses OS tools (Windows API, `osascript`, or `wmctrl`) and runs when playback starts. On Windows it matches window titles by substring (e.g., `TEKKEN™8`). If focus fails, click the game window manually.
