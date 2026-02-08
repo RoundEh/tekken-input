@@ -268,7 +268,9 @@ class TekkenInputApp:
         ttk.Button(control_frame, text="Play", command=self._start_playback).grid(row=0, column=9, padx=4)
         ttk.Button(control_frame, text="Stop", command=self._stop_playback).grid(row=0, column=10, padx=4)
         ttk.Button(control_frame, text="Clear Timeline", command=self._clear_timeline).grid(row=0, column=11, padx=4)
-        ttk.Button(control_frame, text="Focus Window", command=self._focus_window).grid(row=0, column=12, padx=4)
+        ttk.Button(control_frame, text="Move Up", command=lambda: self._move_selected_frames(-1)).grid(row=0, column=12, padx=4)
+        ttk.Button(control_frame, text="Move Down", command=lambda: self._move_selected_frames(1)).grid(row=0, column=13, padx=4)
+        ttk.Button(control_frame, text="Focus Window", command=self._focus_window).grid(row=0, column=14, padx=4)
 
         loop_frame = ttk.LabelFrame(main_frame, text="Looping")
         loop_frame.grid(row=1, column=0, sticky="ew")
@@ -305,6 +307,7 @@ class TekkenInputApp:
             columns=("frame", "p1", "p2"),
             show="headings",
             height=12,
+            selectmode="extended",
         )
         style = ttk.Style(self.root)
         style.configure(
@@ -358,6 +361,38 @@ class TekkenInputApp:
             frame.p1 = ""
             frame.p2 = ""
         self._refresh_timeline()
+
+    def _move_selected_frames(self, direction: int) -> None:
+        items = list(self.timeline_tree.selection())
+        if not items:
+            return
+        children = list(self.timeline_tree.get_children())
+        indices = [children.index(item) for item in items if item in children]
+        if not indices:
+            return
+        if direction < 0:
+            if min(indices) == 0:
+                return
+            for idx in sorted(indices):
+                self.timeline.frames[idx - 1], self.timeline.frames[idx] = (
+                    self.timeline.frames[idx],
+                    self.timeline.frames[idx - 1],
+                )
+            new_indices = [idx - 1 for idx in indices]
+        else:
+            if max(indices) >= len(self.timeline.frames) - 1:
+                return
+            for idx in sorted(indices, reverse=True):
+                self.timeline.frames[idx + 1], self.timeline.frames[idx] = (
+                    self.timeline.frames[idx],
+                    self.timeline.frames[idx + 1],
+                )
+            new_indices = [idx + 1 for idx in indices]
+        self._refresh_timeline()
+        new_children = list(self.timeline_tree.get_children())
+        for idx in new_indices:
+            if 0 <= idx < len(new_children):
+                self.timeline_tree.selection_add(new_children[idx])
 
     def _refresh_timeline(self) -> None:
         for item in self.timeline_tree.get_children():
