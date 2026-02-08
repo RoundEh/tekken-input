@@ -207,7 +207,6 @@ class TekkenInputApp:
         self.mapping_window: tk.Toplevel | None = None
         self.mapping_text: tk.Text | None = None
         self.backend_var = tk.StringVar(value="pynput")
-        self.preset_player_var = tk.IntVar(value=1)
         self.active_preset: str | None = None
         self.drag_indicator: tk.Toplevel | None = None
         self.drag_label: tk.Label | None = None
@@ -315,12 +314,6 @@ class TekkenInputApp:
         self.qcf_canvas.bind("<B1-Motion>", self._update_preset_drag)
         self.qcf_canvas.bind("<ButtonRelease-1>", self._end_preset_drag)
 
-        player_frame = ttk.Frame(presets_frame)
-        player_frame.grid(row=2, column=0, padx=4, pady=4, sticky="ew")
-        ttk.Label(player_frame, text="Target:").grid(row=0, column=0, sticky="w")
-        ttk.Radiobutton(player_frame, text="P1", variable=self.preset_player_var, value=1).grid(row=0, column=1)
-        ttk.Radiobutton(player_frame, text="P2", variable=self.preset_player_var, value=2).grid(row=0, column=2)
-
         log_frame = ttk.LabelFrame(main_frame, text="Log")
         log_frame.grid(row=4, column=0, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
@@ -418,12 +411,6 @@ class TekkenInputApp:
         self.drag_label = None
         self.active_preset = None
 
-    def _handle_preset_drop(self, event: tk.Event) -> None:
-        if not self.active_preset:
-            return
-        self._try_drop_preset(event.x_root, event.y_root)
-        self.active_preset = None
-
     def _try_drop_preset(self, x_root: int, y_root: int) -> None:
         widget = self.root.winfo_containing(x_root, y_root)
         if widget is None:
@@ -434,15 +421,22 @@ class TekkenInputApp:
                 parent = parent.master  # type: ignore[assignment]
             if parent is not self.timeline_tree:
                 return
+        x_local = x_root - self.timeline_tree.winfo_rootx()
         y_local = y_root - self.timeline_tree.winfo_rooty()
         row_id = self.timeline_tree.identify_row(y_local)
         if not row_id:
+            return
+        column_id = self.timeline_tree.identify_column(x_local)
+        if column_id == "#2":
+            player = 1
+        elif column_id == "#3":
+            player = 2
+        else:
             return
         frame_str = self.timeline_tree.set(row_id, "frame")
         if not frame_str:
             return
         frame_index = int(frame_str)
-        player = self.preset_player_var.get()
         self._apply_preset_to_frame(self.active_preset, frame_index, player)
 
     def _apply_preset_to_frame(self, preset: str, frame_index: int, player: int) -> None:
