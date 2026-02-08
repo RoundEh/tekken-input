@@ -293,12 +293,29 @@ class TekkenInputApp:
             show="headings",
             height=12,
         )
+        style = ttk.Style(self.root)
+        style.configure(
+            "Timeline.Treeview",
+            background="#ffffff",
+            fieldbackground="#ffffff",
+            bordercolor="#d9d9d9",
+            lightcolor="#d9d9d9",
+            darkcolor="#d9d9d9",
+        )
+        style.map(
+            "Timeline.Treeview",
+            background=[("selected", "#cfe4ff")],
+            foreground=[("selected", "#000000")],
+        )
         self.timeline_tree.heading("frame", text="Frame")
         self.timeline_tree.heading("p1", text="P1 Input")
         self.timeline_tree.heading("p2", text="P2 Input")
         self.timeline_tree.column("frame", width=80, anchor="center", stretch=False)
         self.timeline_tree.column("p1", width=240, anchor="w", stretch=True)
         self.timeline_tree.column("p2", width=240, anchor="w", stretch=True)
+        self.timeline_tree.configure(style="Timeline.Treeview")
+        self.timeline_tree.tag_configure("even", background="#ffffff")
+        self.timeline_tree.tag_configure("odd", background="#f2f2f2")
         self.timeline_tree.grid(row=0, column=0, sticky="nsew")
         self.timeline_tree.bind("<Double-1>", self._start_edit_cell)
 
@@ -336,6 +353,7 @@ class TekkenInputApp:
                 "",
                 tk.END,
                 values=(f"{idx:03d}", frame.p1, frame.p2),
+                tags=("odd" if idx % 2 else "even",),
             )
 
     def _start_edit_cell(self, event: tk.Event) -> None:
