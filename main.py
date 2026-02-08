@@ -220,8 +220,19 @@ class TekkenInputApp:
         self.mapping_text: tk.Text | None = None
         self.backend_var = tk.StringVar(value="pynput")
         self.active_preset: str | None = None
+        self.active_drag_kind: str | None = None
+        self.active_drag_payload: str | None = None
         self.drag_indicator: tk.Toplevel | None = None
         self.drag_label: tk.Label | None = None
+        self.builder_direction: str | None = None
+        self.builder_buttons: set[str] = set()
+        self.builder_notation = tk.StringVar(value="")
+        self.builder_block: tk.Canvas | None = None
+        self.builder_block_text: int | None = None
+        self.dpad_items: dict[str, tuple[int, int]] = {}
+        self.button_items: dict[str, tuple[int, int]] = {}
+        self.dpad_canvas: tk.Canvas | None = None
+        self.buttons_canvas: tk.Canvas | None = None
 
         self._build_ui()
         self._poll_log()
@@ -335,12 +346,21 @@ class TekkenInputApp:
         self.timeline_tree.grid(row=0, column=0, sticky="nsew")
         self.timeline_tree.bind("<Double-1>", self._start_edit_cell)
 
-        presets_frame = ttk.LabelFrame(content_frame, text="Presets")
-        presets_frame.grid(row=0, column=1, sticky="ns", padx=(10, 0))
+        sidebar_frame = ttk.Frame(content_frame)
+        sidebar_frame.grid(row=0, column=1, sticky="ns", padx=(10, 0))
+        sidebar_frame.columnconfigure(0, weight=1)
+
+        presets_frame = ttk.LabelFrame(sidebar_frame, text="Presets")
+        presets_frame.grid(row=0, column=0, sticky="nsew")
         presets_frame.columnconfigure(0, weight=1)
         ttk.Label(presets_frame, text="Drag preset to frame").grid(row=0, column=0, padx=4, pady=(4, 2))
         for row_index, preset in enumerate(PRESET_DEFINITIONS.keys(), start=1):
             self._add_preset_block(presets_frame, row_index, preset)
+
+        builder_frame = ttk.LabelFrame(sidebar_frame, text="Input Builder")
+        builder_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        builder_frame.columnconfigure(0, weight=1)
+        self._build_input_builder(builder_frame)
 
         log_frame = ttk.LabelFrame(main_frame, text="Log")
         log_frame.grid(row=4, column=0, sticky="nsew")
@@ -439,7 +459,9 @@ class TekkenInputApp:
 
     def _start_preset_drag(self, event: tk.Event, preset: str) -> None:
         self.active_preset = preset
-        self._start_drag_indicator(event)
+        self.active_drag_kind = "preset"
+        self.active_drag_payload = preset
+        self._start_drag_indicator(event, PRESET_LABELS.get(preset, preset.upper()))
 
     def _add_preset_block(self, parent: ttk.Frame, row_index: int, preset: str) -> None:
         label = PRESET_LABELS.get(preset, preset.upper())
@@ -448,16 +470,15 @@ class TekkenInputApp:
         canvas.create_rectangle(5, 5, 135, 35, fill="#2b2b2b", outline="#444")
         canvas.create_text(70, 20, text=label, fill="#ffffff")
         canvas.bind("<ButtonPress-1>", lambda event, name=preset: self._start_preset_drag(event, name))
-        canvas.bind("<B1-Motion>", self._update_preset_drag)
-        canvas.bind("<ButtonRelease-1>", self._end_preset_drag)
+        canvas.bind("<B1-Motion>", self._update_drag)
+        canvas.bind("<ButtonRelease-1>", self._end_drag)
 
-    def _start_drag_indicator(self, event: tk.Event) -> None:
+    def _start_drag_indicator(self, event: tk.Event, label: str) -> None:
         if self.drag_indicator:
             self.drag_indicator.destroy()
         self.drag_indicator = tk.Toplevel(self.root)
         self.drag_indicator.overrideredirect(True)
         self.drag_indicator.attributes("-topmost", True)
-        label = PRESET_LABELS.get(self.active_preset or "", "")
         self.drag_label = tk.Label(
             self.drag_indicator,
             text=label,
@@ -474,48 +495,62 @@ class TekkenInputApp:
             return
         self.drag_indicator.geometry(f"+{x_root + 10}+{y_root + 10}")
 
-    def _update_preset_drag(self, event: tk.Event) -> None:
-        if not self.active_preset:
+    def _update_drag(self, event: tk.Event) -> None:
+        if not self.active_drag_kind:
             return
         self._move_drag_indicator(event.x_root, event.y_root)
 
-    def _end_preset_drag(self, event: tk.Event) -> None:
-        if not self.active_preset:
+    def _end_drag(self, event: tk.Event) -> None:
+        if not self.active_drag_kind:
             return
-        self._try_drop_preset(event.x_root, event.y_root)
+        self._try_drop_drag(event.x_root, event.y_root)
         if self.drag_indicator:
             self.drag_indicator.destroy()
         self.drag_indicator = None
         self.drag_label = None
         self.active_preset = None
+        self.active_drag_kind = None
+        self.active_drag_payload = None
 
-    def _try_drop_preset(self, x_root: int, y_root: int) -> None:
+    def _try_drop_drag(self, x_root: int, y_root: int) -> None:
+        target = self._get_drop_target(x_root, y_root)
+        if not target:
+            return
+        frame_index, player = target
+        if self.active_drag_kind == "preset":
+            if self.active_drag_payload:
+                self._apply_preset_to_frame(self.active_drag_payload, frame_index, player)
+        elif self.active_drag_kind == "custom":
+            if self.active_drag_payload:
+                self._apply_notation_to_frame(self.active_drag_payload, frame_index, player)
+
+    def _get_drop_target(self, x_root: int, y_root: int) -> tuple[int, int] | None:
         widget = self.root.winfo_containing(x_root, y_root)
         if widget is None:
-            return
+            return None
         if widget is not self.timeline_tree:
             parent = widget
             while parent is not None and parent is not self.timeline_tree:
                 parent = parent.master  # type: ignore[assignment]
             if parent is not self.timeline_tree:
-                return
+                return None
         x_local = x_root - self.timeline_tree.winfo_rootx()
         y_local = y_root - self.timeline_tree.winfo_rooty()
         row_id = self.timeline_tree.identify_row(y_local)
         if not row_id:
-            return
+            return None
         column_id = self.timeline_tree.identify_column(x_local)
         if column_id == "#2":
             player = 1
         elif column_id == "#3":
             player = 2
         else:
-            return
+            return None
         frame_str = self.timeline_tree.set(row_id, "frame")
         if not frame_str:
-            return
+            return None
         frame_index = int(frame_str) - 1
-        self._apply_preset_to_frame(self.active_preset, frame_index, player)
+        return frame_index, player
 
     def _apply_preset_to_frame(self, preset: str, frame_index: int, player: int) -> None:
         steps = PRESET_DEFINITIONS.get(preset)
@@ -530,6 +565,128 @@ class TekkenInputApp:
                 break
             self.timeline.set_input(target_index, player, step)
         self._refresh_timeline()
+
+    def _apply_notation_to_frame(self, notation: str, frame_index: int, player: int) -> None:
+        if not notation:
+            return
+        self.timeline.set_input(frame_index, player, notation)
+        self._refresh_timeline()
+
+    def _build_input_builder(self, parent: ttk.Frame) -> None:
+        ttk.Label(parent, text="Click buttons, then drag the block").grid(row=0, column=0, pady=(4, 6))
+
+        dpad_frame = ttk.Frame(parent)
+        dpad_frame.grid(row=1, column=0, pady=(0, 6))
+        self.dpad_canvas = tk.Canvas(dpad_frame, width=140, height=140, highlightthickness=0)
+        self.dpad_canvas.grid(row=0, column=0)
+        self._add_dpad_button(self.dpad_canvas, "u", 70, 25, "↑")
+        self._add_dpad_button(self.dpad_canvas, "b", 25, 70, "←")
+        self._add_dpad_button(self.dpad_canvas, "f", 115, 70, "→")
+        self._add_dpad_button(self.dpad_canvas, "d", 70, 115, "↓")
+        self.dpad_canvas.tag_bind("dpad", "<ButtonPress-1>", self._on_dpad_click)
+
+        buttons_frame = ttk.Frame(parent)
+        buttons_frame.grid(row=2, column=0, pady=(0, 6))
+        self.buttons_canvas = tk.Canvas(buttons_frame, width=140, height=140, highlightthickness=0)
+        self.buttons_canvas.grid(row=0, column=0)
+        self._add_button_circle(self.buttons_canvas, "1", 35, 35)
+        self._add_button_circle(self.buttons_canvas, "2", 105, 35)
+        self._add_button_circle(self.buttons_canvas, "3", 35, 105)
+        self._add_button_circle(self.buttons_canvas, "4", 105, 105)
+        self.buttons_canvas.tag_bind("btn", "<ButtonPress-1>", self._on_button_click)
+
+        block_frame = ttk.Frame(parent)
+        block_frame.grid(row=3, column=0, pady=(0, 6))
+        self.builder_block = tk.Canvas(block_frame, width=140, height=40, highlightthickness=0)
+        self.builder_block.grid(row=0, column=0)
+        self.builder_block.create_rectangle(5, 5, 135, 35, fill="#404040", outline="#4f4f4f", tags=("block",))
+        self.builder_block_text = self.builder_block.create_text(70, 20, text="Select inputs", fill="#ffffff")
+        self.builder_block.bind("<ButtonPress-1>", self._start_custom_drag)
+        self.builder_block.bind("<B1-Motion>", self._update_drag)
+        self.builder_block.bind("<ButtonRelease-1>", self._end_drag)
+        ttk.Button(parent, text="Clear Builder", command=self._clear_builder).grid(row=4, column=0, pady=(0, 6))
+
+    def _add_dpad_button(self, canvas: tk.Canvas, token: str, x: int, y: int, label: str) -> None:
+        oval = canvas.create_oval(x - 20, y - 20, x + 20, y + 20, fill="#f0f0f0", outline="#666", tags=("dpad", token))
+        text = canvas.create_text(x, y, text=label, fill="#222", tags=("dpad", token))
+        self.dpad_items[token] = (oval, text)
+
+    def _add_button_circle(self, canvas: tk.Canvas, token: str, x: int, y: int) -> None:
+        oval = canvas.create_oval(x - 22, y - 22, x + 22, y + 22, fill="#f0f0f0", outline="#666", tags=("btn", token))
+        text = canvas.create_text(x, y, text=token, fill="#222", tags=("btn", token))
+        self.button_items[token] = (oval, text)
+
+    def _on_dpad_click(self, event: tk.Event) -> None:
+        canvas = event.widget
+        if not isinstance(canvas, tk.Canvas):
+            return
+        current = canvas.find_withtag("current")
+        if not current:
+            return
+        tags = canvas.gettags(current[0])
+        token = next((tag for tag in tags if tag in self.dpad_items), None)
+        if not token:
+            return
+        if self.builder_direction == token:
+            self.builder_direction = None
+        else:
+            self.builder_direction = token
+        self._update_builder_visuals()
+
+    def _on_button_click(self, event: tk.Event) -> None:
+        canvas = event.widget
+        if not isinstance(canvas, tk.Canvas):
+            return
+        current = canvas.find_withtag("current")
+        if not current:
+            return
+        tags = canvas.gettags(current[0])
+        token = next((tag for tag in tags if tag in self.button_items), None)
+        if not token:
+            return
+        if token in self.builder_buttons:
+            self.builder_buttons.remove(token)
+        else:
+            self.builder_buttons.add(token)
+        self._update_builder_visuals()
+
+    def _update_builder_visuals(self) -> None:
+        for token, (oval, text) in self.dpad_items.items():
+            fill = "#ffb3b3" if self.builder_direction == token else "#f0f0f0"
+            if self.dpad_canvas:
+                self.dpad_canvas.itemconfigure(oval, fill=fill)
+                self.dpad_canvas.itemconfigure(text, fill="#222")
+        for token, (oval, text) in self.button_items.items():
+            fill = "#ffb3b3" if token in self.builder_buttons else "#f0f0f0"
+            if self.buttons_canvas:
+                self.buttons_canvas.itemconfigure(oval, fill=fill)
+                self.buttons_canvas.itemconfigure(text, fill="#222")
+        notation = self._compose_builder_notation()
+        self.builder_notation.set(notation)
+        if self.builder_block and self.builder_block_text:
+            label = notation if notation else "Select inputs"
+            self.builder_block.itemconfigure(self.builder_block_text, text=label)
+
+    def _compose_builder_notation(self) -> str:
+        parts: list[str] = []
+        if self.builder_direction:
+            parts.append(self.builder_direction)
+        if self.builder_buttons:
+            parts.extend(sorted(self.builder_buttons, key=lambda x: int(x)))
+        return "+".join(parts)
+
+    def _clear_builder(self) -> None:
+        self.builder_direction = None
+        self.builder_buttons.clear()
+        self._update_builder_visuals()
+
+    def _start_custom_drag(self, event: tk.Event) -> None:
+        notation = self.builder_notation.get()
+        if not notation:
+            return
+        self.active_drag_kind = "custom"
+        self.active_drag_payload = notation
+        self._start_drag_indicator(event, notation)
 
     def _open_mapping_editor(self) -> None:
         if self.mapping_window and tk.Toplevel.winfo_exists(self.mapping_window):

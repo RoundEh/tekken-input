@@ -13,6 +13,7 @@ A simple frame-by-frame input tool for Tekken-style notation with two-player sup
 - Selectable input backend (pynput, pydirectinput, or log-only)
 - Inputs are pressed for one frame by default, then released on the next frame (use separate frames for multi-step combos). Playback uses high-precision scheduling to reduce frame drift.
 - Drag preset blocks (`QCF`, `QCB`, `EWGF`, `CROUCHDASH`) onto the P1 or P2 column to fill predefined multi-frame inputs (e.g., `QCF` = `d`, `df`, `f`; `QCB` = `d`, `db`, `b`; `EWGF` = `f`, neutral, `d`, `df+2`; `CROUCHDASH` = `f`, neutral, `d`, `df`) without extending the total frame count.
+- Click the Input Builder direction pad and button circles to compose notation and drag the generated block onto the timeline.
 - Clear Timeline button to wipe all frame inputs without changing the frame count.
 - Move Up/Move Down controls to shift selected timeline rows together.
 
