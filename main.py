@@ -32,6 +32,18 @@ DEFAULT_FPS = 60
 MAPPING_PATH = "mapping.json"
 
 DIRECTION_KEYS = {"u", "d", "b", "f", "uf", "ub", "df", "db"}
+PRESET_DEFINITIONS = {
+    "qcf": ["d", "df", "f"],
+    "qcb": ["d", "db", "b"],
+    "ewgf": ["f", "", "d", "df+2"],
+    "crouchdash": ["f", "", "d", "df"],
+}
+PRESET_LABELS = {
+    "qcf": "QCF",
+    "qcb": "QCB",
+    "ewgf": "EWGF",
+    "crouchdash": "CROUCHDASH",
+}
 
 
 @dataclass
@@ -323,13 +335,8 @@ class TekkenInputApp:
         presets_frame.grid(row=0, column=1, sticky="ns", padx=(10, 0))
         presets_frame.columnconfigure(0, weight=1)
         ttk.Label(presets_frame, text="Drag preset to frame").grid(row=0, column=0, padx=4, pady=(4, 2))
-        self.qcf_canvas = tk.Canvas(presets_frame, width=80, height=40, highlightthickness=0)
-        self.qcf_canvas.grid(row=1, column=0, padx=6, pady=6)
-        self.qcf_canvas.create_rectangle(5, 5, 75, 35, fill="#2b2b2b", outline="#444")
-        self.qcf_canvas.create_text(40, 20, text="QCF", fill="#ffffff")
-        self.qcf_canvas.bind("<ButtonPress-1>", lambda event: self._start_preset_drag(event, "qcf"))
-        self.qcf_canvas.bind("<B1-Motion>", self._update_preset_drag)
-        self.qcf_canvas.bind("<ButtonRelease-1>", self._end_preset_drag)
+        for row_index, preset in enumerate(PRESET_DEFINITIONS.keys(), start=1):
+            self._add_preset_block(presets_frame, row_index, preset)
 
         log_frame = ttk.LabelFrame(main_frame, text="Log")
         log_frame.grid(row=4, column=0, sticky="nsew")
@@ -392,15 +399,26 @@ class TekkenInputApp:
         self.active_preset = preset
         self._start_drag_indicator(event)
 
+    def _add_preset_block(self, parent: ttk.Frame, row_index: int, preset: str) -> None:
+        label = PRESET_LABELS.get(preset, preset.upper())
+        canvas = tk.Canvas(parent, width=140, height=40, highlightthickness=0)
+        canvas.grid(row=row_index, column=0, padx=6, pady=6)
+        canvas.create_rectangle(5, 5, 135, 35, fill="#2b2b2b", outline="#444")
+        canvas.create_text(70, 20, text=label, fill="#ffffff")
+        canvas.bind("<ButtonPress-1>", lambda event, name=preset: self._start_preset_drag(event, name))
+        canvas.bind("<B1-Motion>", self._update_preset_drag)
+        canvas.bind("<ButtonRelease-1>", self._end_preset_drag)
+
     def _start_drag_indicator(self, event: tk.Event) -> None:
         if self.drag_indicator:
             self.drag_indicator.destroy()
         self.drag_indicator = tk.Toplevel(self.root)
         self.drag_indicator.overrideredirect(True)
         self.drag_indicator.attributes("-topmost", True)
+        label = PRESET_LABELS.get(self.active_preset or "", "")
         self.drag_label = tk.Label(
             self.drag_indicator,
-            text=self.active_preset.upper() if self.active_preset else "",
+            text=label,
             bg="#2b2b2b",
             fg="#ffffff",
             padx=12,
@@ -458,9 +476,9 @@ class TekkenInputApp:
         self._apply_preset_to_frame(self.active_preset, frame_index, player)
 
     def _apply_preset_to_frame(self, preset: str, frame_index: int, player: int) -> None:
-        if preset != "qcf":
+        steps = PRESET_DEFINITIONS.get(preset)
+        if not steps:
             return
-        steps = ["d", "df", "f"]
         max_frames = len(self.timeline.frames)
         if max_frames == 0:
             return
