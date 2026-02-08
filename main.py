@@ -366,7 +366,7 @@ class TekkenInputApp:
             self.timeline_tree.insert(
                 "",
                 tk.END,
-                values=(f"{idx:03d}", frame.p1, frame.p2),
+                values=(f"{idx + 1:03d}", frame.p1, frame.p2),
                 tags=("odd" if idx % 2 else "even",),
             )
 
@@ -392,7 +392,7 @@ class TekkenInputApp:
             new_value = entry.get()
             self.timeline_tree.set(item, column, new_value)
             frame_str = self.timeline_tree.set(item, "frame")
-            frame_index = int(frame_str)
+            frame_index = int(frame_str) - 1
             if column == "#2":
                 self.timeline.set_input(frame_index, 1, new_value)
             elif column == "#3":
@@ -479,7 +479,7 @@ class TekkenInputApp:
         frame_str = self.timeline_tree.set(row_id, "frame")
         if not frame_str:
             return
-        frame_index = int(frame_str)
+        frame_index = int(frame_str) - 1
         self._apply_preset_to_frame(self.active_preset, frame_index, player)
 
     def _apply_preset_to_frame(self, preset: str, frame_index: int, player: int) -> None:
