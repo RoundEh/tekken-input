@@ -1,0 +1,38 @@
+{
+  "p1": {
+    "directions": {
+      "u": "w",
+      "d": "s",
+      "b": "a",
+      "f": "d",
+      "uf": "w+d",
+      "ub": "w+a",
+      "df": "s+d",
+      "db": "s+a"
+    },
+    "buttons": {
+      "1": "u",
+      "2": "i",
+      "3": "j",
+      "4": "k"
+    }
+  },
+  "p2": {
+    "directions": {
+      "u": "up",
+      "d": "down",
+      "b": "right",
+      "f": "left",
+      "uf": "up+left",
+      "ub": "up+right",
+      "df": "down+left",
+      "db": "down+right"
+    },
+    "buttons": {
+      "1": "insert",
+      "2": "home",
+      "3": "delete",
+      "4": "end"
+    }
+  }
+}

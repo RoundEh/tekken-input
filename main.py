@@ -1,0 +1,912 @@
+import json
+import os
+import queue
+import threading
+import time
+import tkinter as tk
+from sys import platform
+import ctypes.wintypes
+from dataclasses import dataclass, field
+from tkinter import messagebox, ttk
+
+try:
+    from pynput.keyboard import Controller as KeyboardController
+    from pynput.keyboard import Key
+
+    PYNPUT_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency
+    KeyboardController = None
+    Key = None
+    PYNPUT_AVAILABLE = False
+
+try:
+    import pydirectinput
+
+    PYDIRECT_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency
+    pydirectinput = None
+    PYDIRECT_AVAILABLE = False
+
+
+DEFAULT_FPS = 60
+MAPPING_PATH = "mapping.json"
+
+DIRECTION_KEYS = {"u", "d", "b", "f", "uf", "ub", "df", "db"}
+PRESET_DEFINITIONS = {
+    "qcf": ["d", "df", "f"],
+    "qcb": ["d", "db", "b"],
+    "ewgf": ["f", "", "d", "df+2"],
+    "crouchdash": ["f", "", "d", "df"],
+}
+PRESET_LABELS = {
+    "qcf": "QCF",
+    "qcb": "QCB",
+    "ewgf": "EWGF",
+    "crouchdash": "CROUCHDASH",
+}
+
+
+@dataclass
+class FrameInput:
+    p1: str = ""
+    p2: str = ""
+
+
+@dataclass
+class Timeline:
+    frames: list[FrameInput] = field(default_factory=list)
+
+    def ensure_length(self, length: int, allow_shrink: bool = True) -> None:
+        if length < 0:
+            return
+        if allow_shrink and len(self.frames) > length:
+            self.frames = self.frames[:length]
+            return
+        while len(self.frames) < length:
+            self.frames.append(FrameInput())
+
+    def set_input(self, frame_index: int, player: int, notation: str) -> None:
+        self.ensure_length(frame_index + 1, allow_shrink=False)
+        if player == 1:
+            self.frames[frame_index].p1 = notation
+        else:
+            self.frames[frame_index].p2 = notation
+
+    def get_input(self, frame_index: int, player: int) -> str:
+        if frame_index < 0 or frame_index >= len(self.frames):
+            return ""
+        frame = self.frames[frame_index]
+        return frame.p1 if player == 1 else frame.p2
+
+
+class InputMapper:
+    def __init__(self, mapping_path: str = MAPPING_PATH) -> None:
+        self.mapping_path = mapping_path
+        self.mapping = {"p1": {"directions": {}, "buttons": {}}, "p2": {"directions": {}, "buttons": {}}}
+        self.load()
+
+    def load(self) -> None:
+        try:
+            with open(self.mapping_path, "r", encoding="utf-8") as file:
+                loaded = json.load(file)
+        except FileNotFoundError:
+            loaded = {}
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid mapping JSON: {exc}") from exc
+        if "p1" in loaded or "p2" in loaded:
+            self.mapping = loaded
+        else:
+            self.mapping = {
+                "p1": loaded or {"directions": {}, "buttons": {}},
+                "p2": loaded or {"directions": {}, "buttons": {}},
+            }
+
+    def save(self, raw_text: str) -> None:
+        parsed = json.loads(raw_text)
+        self.mapping = parsed
+        with open(self.mapping_path, "w", encoding="utf-8") as file:
+            json.dump(self.mapping, file, indent=2)
+
+    def resolve_key(self, token: str, player: int) -> list[str]:
+        player_key = "p1" if player == 1 else "p2"
+        player_map = self.mapping.get(player_key, {})
+        directions = player_map.get("directions", {})
+        buttons = player_map.get("buttons", {})
+        if token in directions:
+            return directions[token].split("+")
+        if token in buttons:
+            return buttons[token].split("+")
+        return []
+
+
+class KeyboardEmulator:
+    def __init__(self, log_queue: queue.Queue[str]) -> None:
+        self.log_queue = log_queue
+        self.controller = KeyboardController() if PYNPUT_AVAILABLE else None
+        self.mode = "pynput"
+
+    def key_down(self, keys: list[str]) -> None:
+        if not keys:
+            return
+        if self.mode == "pydirectinput":
+            if not PYDIRECT_AVAILABLE:
+                self.log_queue.put("[NO EMU] pydirectinput not installed.")
+                self.log_queue.put(f"[NO EMU] Press: {keys}")
+                return
+            for key in keys:
+                pydirectinput.keyDown(self._convert_key(key))
+            return
+        if self.mode == "pynput":
+            if not PYNPUT_AVAILABLE:
+                self.log_queue.put("[NO EMU] pynput not installed.")
+                self.log_queue.put(f"[NO EMU] Press: {keys}")
+                return
+            for key in keys:
+                self.controller.press(self._convert_key(key))
+            return
+        self.log_queue.put(f"[LOG ONLY] Press: {keys}")
+
+    def key_up(self, keys: list[str]) -> None:
+        if not keys:
+            return
+        if self.mode == "pydirectinput":
+            if not PYDIRECT_AVAILABLE:
+                self.log_queue.put("[NO EMU] pydirectinput not installed.")
+                self.log_queue.put(f"[NO EMU] Release: {keys}")
+                return
+            for key in keys:
+                pydirectinput.keyUp(self._convert_key(key))
+            return
+        if self.mode == "pynput":
+            if not PYNPUT_AVAILABLE:
+                self.log_queue.put("[NO EMU] pynput not installed.")
+                self.log_queue.put(f"[NO EMU] Release: {keys}")
+                return
+            for key in keys:
+                self.controller.release(self._convert_key(key))
+            return
+        self.log_queue.put(f"[LOG ONLY] Release: {keys}")
+
+    def _convert_key(self, key: str):
+        special = {
+            "space": " ",
+            "enter": "\n",
+            "tab": "\t",
+            "up": Key.up if Key else "up",
+            "down": Key.down if Key else "down",
+            "left": Key.left if Key else "left",
+            "right": Key.right if Key else "right",
+            "insert": Key.insert if Key else "insert",
+            "delete": Key.delete if Key else "delete",
+            "home": Key.home if Key else "home",
+            "end": Key.end if Key else "end",
+        }
+        return special.get(key, key)
+
+
+class TekkenNotationParser:
+    def __init__(self, mapper: InputMapper) -> None:
+        self.mapper = mapper
+
+    def parse(self, notation: str, player: int) -> list[list[str]]:
+        if not notation:
+            return []
+        steps = [step.strip() for step in notation.replace(" ", "").split(",") if step.strip()]
+        parsed_steps = []
+        for step in steps:
+            tokens = [token for token in step.split("+") if token]
+            keys = []
+            for token in tokens:
+                token_keys = self.mapper.resolve_key(token, player)
+                if not token_keys:
+                    token_keys = [token]
+                keys.extend(token_keys)
+            parsed_steps.append(keys)
+        return parsed_steps
+
+
+class TekkenInputApp:
+    def __init__(self, root: tk.Tk) -> None:
+        self.root = root
+        self.root.title("Tekken Input Simulator")
+        self.timeline = Timeline()
+        self.mapper = InputMapper()
+        self.parser = TekkenNotationParser(self.mapper)
+        self.log_queue: queue.Queue[str] = queue.Queue()
+        self.emulator = KeyboardEmulator(self.log_queue)
+        self.playback_thread: threading.Thread | None = None
+        self.stop_event = threading.Event()
+        self.mapping_window: tk.Toplevel | None = None
+        self.mapping_text: tk.Text | None = None
+        self.backend_var = tk.StringVar(value="pynput")
+        self.active_preset: str | None = None
+        self.active_drag_kind: str | None = None
+        self.active_drag_payload: str | None = None
+        self.drag_indicator: tk.Toplevel | None = None
+        self.drag_label: tk.Label | None = None
+        self.builder_directions: set[str] = set()
+        self.builder_buttons: set[str] = set()
+        self.builder_notation = tk.StringVar(value="")
+        self.builder_block: tk.Canvas | None = None
+        self.builder_block_text: int | None = None
+        self.dpad_items: dict[str, tuple[int, int]] = {}
+        self.button_items: dict[str, tuple[int, int]] = {}
+        self.dpad_canvas: tk.Canvas | None = None
+        self.buttons_canvas: tk.Canvas | None = None
+
+        self._build_ui()
+        self._poll_log()
+
+    def _build_ui(self) -> None:
+        main_frame = ttk.Frame(self.root, padding=12)
+        main_frame.grid(row=0, column=0, sticky="nsew")
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+
+        menubar = tk.Menu(self.root)
+        mapping_menu = tk.Menu(menubar, tearoff=False)
+        mapping_menu.add_command(label="Open Mapping Editor", command=self._open_mapping_editor)
+        menubar.add_cascade(label="Mapping", menu=mapping_menu)
+        self.root.config(menu=menubar)
+
+        control_frame = ttk.LabelFrame(main_frame, text="Playback")
+        control_frame.grid(row=0, column=0, sticky="ew")
+        control_frame.columnconfigure(12, weight=1)
+
+        ttk.Label(control_frame, text="FPS:").grid(row=0, column=0, padx=4, pady=4)
+        self.fps_var = tk.IntVar(value=DEFAULT_FPS)
+        ttk.Entry(control_frame, textvariable=self.fps_var, width=6).grid(row=0, column=1)
+
+        ttk.Label(control_frame, text="Total Frames:").grid(row=0, column=2, padx=4)
+        self.total_frames_var = tk.IntVar(value=60)
+        ttk.Entry(control_frame, textvariable=self.total_frames_var, width=8).grid(row=0, column=3)
+
+        ttk.Label(control_frame, text="Startup Delay (s):").grid(row=0, column=4, padx=4)
+        self.start_delay_var = tk.DoubleVar(value=1.0)
+        ttk.Entry(control_frame, textvariable=self.start_delay_var, width=8).grid(row=0, column=5)
+
+        ttk.Label(control_frame, text="Backend:").grid(row=0, column=6, padx=4)
+        backend_menu = ttk.Combobox(
+            control_frame,
+            textvariable=self.backend_var,
+            values=("pynput", "pydirectinput", "log"),
+            width=12,
+            state="readonly",
+        )
+        backend_menu.grid(row=0, column=7, padx=4)
+
+        ttk.Button(control_frame, text="Apply", command=self._apply_total_frames).grid(row=0, column=8, padx=4)
+        ttk.Button(control_frame, text="Play", command=self._start_playback).grid(row=0, column=9, padx=4)
+        ttk.Button(control_frame, text="Stop", command=self._stop_playback).grid(row=0, column=10, padx=4)
+        ttk.Button(control_frame, text="Clear Timeline", command=self._clear_timeline).grid(row=0, column=11, padx=4)
+        ttk.Button(control_frame, text="Move Up", command=lambda: self._move_selected_frames(-1)).grid(row=0, column=12, padx=4)
+        ttk.Button(control_frame, text="Move Down", command=lambda: self._move_selected_frames(1)).grid(row=0, column=13, padx=4)
+        ttk.Button(control_frame, text="Focus Window", command=self._focus_window).grid(row=0, column=14, padx=4)
+
+        loop_frame = ttk.LabelFrame(main_frame, text="Looping")
+        loop_frame.grid(row=1, column=0, sticky="ew")
+        loop_frame.columnconfigure(3, weight=1)
+        self.loop_enabled_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(loop_frame, text="Enable Loop", variable=self.loop_enabled_var).grid(row=0, column=0, padx=4, pady=4)
+        ttk.Label(loop_frame, text="Loop Count (0=infinite):").grid(row=0, column=1, padx=4)
+        self.loop_count_var = tk.IntVar(value=0)
+        ttk.Entry(loop_frame, textvariable=self.loop_count_var, width=8).grid(row=0, column=2)
+
+        focus_frame = ttk.LabelFrame(main_frame, text="Window Focus")
+        focus_frame.grid(row=2, column=0, sticky="ew", pady=10)
+        focus_frame.columnconfigure(1, weight=1)
+        ttk.Label(focus_frame, text="Window Title:").grid(row=0, column=0, padx=4, pady=4)
+        self.window_title_var = tk.StringVar(value="TEKKEN™8")
+        ttk.Entry(focus_frame, textvariable=self.window_title_var).grid(row=0, column=1, sticky="ew")
+        ttk.Button(focus_frame, text="Focus", command=self._focus_window).grid(row=0, column=2, padx=4)
+
+        timeline_frame = ttk.LabelFrame(main_frame, text="Timeline (Frame | P1 | P2)")
+        timeline_frame.grid(row=3, column=0, sticky="nsew")
+        main_frame.rowconfigure(3, weight=1)
+        timeline_frame.columnconfigure(0, weight=1)
+
+        content_frame = ttk.Frame(timeline_frame)
+        content_frame.grid(row=0, column=0, sticky="nsew")
+        timeline_frame.rowconfigure(0, weight=1)
+        timeline_frame.columnconfigure(0, weight=1)
+        content_frame.columnconfigure(0, weight=1)
+        content_frame.columnconfigure(1, weight=0)
+        content_frame.rowconfigure(0, weight=1)
+
+        self.timeline_tree = ttk.Treeview(
+            content_frame,
+            columns=("frame", "p1", "p2"),
+            show="headings",
+            height=12,
+            selectmode="extended",
+        )
+        style = ttk.Style(self.root)
+        style.configure(
+            "Timeline.Treeview",
+            background="#ffffff",
+            fieldbackground="#ffffff",
+            bordercolor="#d9d9d9",
+            lightcolor="#d9d9d9",
+            darkcolor="#d9d9d9",
+        )
+        style.map(
+            "Timeline.Treeview",
+            background=[("selected", "#cfe4ff")],
+            foreground=[("selected", "#000000")],
+        )
+        self.timeline_tree.heading("frame", text="Frame")
+        self.timeline_tree.heading("p1", text="P1 Input")
+        self.timeline_tree.heading("p2", text="P2 Input")
+        self.timeline_tree.column("frame", width=80, anchor="center", stretch=False)
+        self.timeline_tree.column("p1", width=240, anchor="w", stretch=True)
+        self.timeline_tree.column("p2", width=240, anchor="w", stretch=True)
+        self.timeline_tree.configure(style="Timeline.Treeview")
+        self.timeline_tree.tag_configure("even", background="#ffffff")
+        self.timeline_tree.tag_configure("odd", background="#f2f2f2")
+        self.timeline_tree.grid(row=0, column=0, sticky="nsew")
+        self.timeline_tree.bind("<Double-1>", self._start_edit_cell)
+
+        sidebar_frame = ttk.Frame(content_frame)
+        sidebar_frame.grid(row=0, column=1, sticky="ns", padx=(10, 0))
+        sidebar_frame.columnconfigure(0, weight=1)
+
+        presets_frame = ttk.LabelFrame(sidebar_frame, text="Presets")
+        presets_frame.grid(row=0, column=0, sticky="nsew")
+        presets_frame.columnconfigure(0, weight=1)
+        ttk.Label(presets_frame, text="Drag preset to frame").grid(row=0, column=0, padx=4, pady=(4, 2))
+        for row_index, preset in enumerate(PRESET_DEFINITIONS.keys(), start=1):
+            self._add_preset_block(presets_frame, row_index, preset)
+
+        builder_frame = ttk.LabelFrame(sidebar_frame, text="Input Builder")
+        builder_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        builder_frame.columnconfigure(0, weight=1)
+        self._build_input_builder(builder_frame)
+
+        log_frame = ttk.LabelFrame(main_frame, text="Log")
+        log_frame.grid(row=4, column=0, sticky="nsew")
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+        self.log_list = tk.Listbox(log_frame, height=8)
+        self.log_list.grid(row=0, column=0, sticky="nsew")
+
+        self._apply_total_frames()
+
+    def _apply_total_frames(self) -> None:
+        total = max(1, self.total_frames_var.get())
+        self.timeline.ensure_length(total)
+        self._refresh_timeline()
+
+    def _clear_timeline(self) -> None:
+        for frame in self.timeline.frames:
+            frame.p1 = ""
+            frame.p2 = ""
+        self._refresh_timeline()
+
+    def _move_selected_frames(self, direction: int) -> None:
+        items = list(self.timeline_tree.selection())
+        if not items:
+            return
+        children = list(self.timeline_tree.get_children())
+        indices = [children.index(item) for item in items if item in children]
+        if not indices:
+            return
+        if direction < 0:
+            if min(indices) == 0:
+                return
+            for idx in sorted(indices):
+                self.timeline.frames[idx - 1], self.timeline.frames[idx] = (
+                    self.timeline.frames[idx],
+                    self.timeline.frames[idx - 1],
+                )
+            new_indices = [idx - 1 for idx in indices]
+        else:
+            if max(indices) >= len(self.timeline.frames) - 1:
+                return
+            for idx in sorted(indices, reverse=True):
+                self.timeline.frames[idx + 1], self.timeline.frames[idx] = (
+                    self.timeline.frames[idx],
+                    self.timeline.frames[idx + 1],
+                )
+            new_indices = [idx + 1 for idx in indices]
+        self._refresh_timeline()
+        new_children = list(self.timeline_tree.get_children())
+        for idx in new_indices:
+            if 0 <= idx < len(new_children):
+                self.timeline_tree.selection_add(new_children[idx])
+
+    def _refresh_timeline(self) -> None:
+        for item in self.timeline_tree.get_children():
+            self.timeline_tree.delete(item)
+        for idx, frame in enumerate(self.timeline.frames):
+            self.timeline_tree.insert(
+                "",
+                tk.END,
+                values=(f"{idx + 1:03d}", frame.p1, frame.p2),
+                tags=("odd" if idx % 2 else "even",),
+            )
+
+    def _start_edit_cell(self, event: tk.Event) -> None:
+        region = self.timeline_tree.identify("region", event.x, event.y)
+        if region != "cell":
+            return
+        item = self.timeline_tree.identify_row(event.y)
+        column = self.timeline_tree.identify_column(event.x)
+        if not item or column == "#1":
+            return
+        bbox = self.timeline_tree.bbox(item, column)
+        if not bbox:
+            return
+        x, y, width, height = bbox
+        value = self.timeline_tree.set(item, column)
+        entry = ttk.Entry(self.timeline_tree)
+        entry.place(x=x, y=y, width=width, height=height)
+        entry.insert(0, value)
+        entry.focus_set()
+
+        def save_edit(_: tk.Event | None = None) -> None:
+            new_value = entry.get()
+            self.timeline_tree.set(item, column, new_value)
+            frame_str = self.timeline_tree.set(item, "frame")
+            frame_index = int(frame_str) - 1
+            if column == "#2":
+                self.timeline.set_input(frame_index, 1, new_value)
+            elif column == "#3":
+                self.timeline.set_input(frame_index, 2, new_value)
+            entry.destroy()
+
+        entry.bind("<Return>", save_edit)
+        entry.bind("<FocusOut>", save_edit)
+
+    def _start_preset_drag(self, event: tk.Event, preset: str) -> None:
+        self.active_preset = preset
+        self.active_drag_kind = "preset"
+        self.active_drag_payload = preset
+        self._start_drag_indicator(event, PRESET_LABELS.get(preset, preset.upper()))
+
+    def _add_preset_block(self, parent: ttk.Frame, row_index: int, preset: str) -> None:
+        label = PRESET_LABELS.get(preset, preset.upper())
+        canvas = tk.Canvas(parent, width=140, height=40, highlightthickness=0)
+        canvas.grid(row=row_index, column=0, padx=6, pady=6)
+        canvas.create_rectangle(5, 5, 135, 35, fill="#2b2b2b", outline="#444")
+        canvas.create_text(70, 20, text=label, fill="#ffffff")
+        canvas.bind("<ButtonPress-1>", lambda event, name=preset: self._start_preset_drag(event, name))
+        canvas.bind("<B1-Motion>", self._update_drag)
+        canvas.bind("<ButtonRelease-1>", self._end_drag)
+
+    def _start_drag_indicator(self, event: tk.Event, label: str) -> None:
+        if self.drag_indicator:
+            self.drag_indicator.destroy()
+        self.drag_indicator = tk.Toplevel(self.root)
+        self.drag_indicator.overrideredirect(True)
+        self.drag_indicator.attributes("-topmost", True)
+        self.drag_label = tk.Label(
+            self.drag_indicator,
+            text=label,
+            bg="#2b2b2b",
+            fg="#ffffff",
+            padx=12,
+            pady=6,
+        )
+        self.drag_label.pack()
+        self._move_drag_indicator(event.x_root, event.y_root)
+
+    def _move_drag_indicator(self, x_root: int, y_root: int) -> None:
+        if not self.drag_indicator:
+            return
+        self.drag_indicator.geometry(f"+{x_root + 10}+{y_root + 10}")
+
+    def _update_drag(self, event: tk.Event) -> None:
+        if not self.active_drag_kind:
+            return
+        self._move_drag_indicator(event.x_root, event.y_root)
+
+    def _end_drag(self, event: tk.Event) -> None:
+        if not self.active_drag_kind:
+            return
+        self._try_drop_drag(event.x_root, event.y_root)
+        if self.drag_indicator:
+            self.drag_indicator.destroy()
+        self.drag_indicator = None
+        self.drag_label = None
+        self.active_preset = None
+        self.active_drag_kind = None
+        self.active_drag_payload = None
+
+    def _try_drop_drag(self, x_root: int, y_root: int) -> None:
+        target = self._get_drop_target(x_root, y_root)
+        if not target:
+            return
+        frame_index, player = target
+        if self.active_drag_kind == "preset":
+            if self.active_drag_payload:
+                self._apply_preset_to_frame(self.active_drag_payload, frame_index, player)
+        elif self.active_drag_kind == "custom":
+            if self.active_drag_payload:
+                self._apply_notation_to_frame(self.active_drag_payload, frame_index, player)
+
+    def _get_drop_target(self, x_root: int, y_root: int) -> tuple[int, int] | None:
+        widget = self.root.winfo_containing(x_root, y_root)
+        if widget is None:
+            return None
+        if widget is not self.timeline_tree:
+            parent = widget
+            while parent is not None and parent is not self.timeline_tree:
+                parent = parent.master  # type: ignore[assignment]
+            if parent is not self.timeline_tree:
+                return None
+        x_local = x_root - self.timeline_tree.winfo_rootx()
+        y_local = y_root - self.timeline_tree.winfo_rooty()
+        row_id = self.timeline_tree.identify_row(y_local)
+        if not row_id:
+            return None
+        column_id = self.timeline_tree.identify_column(x_local)
+        if column_id == "#2":
+            player = 1
+        elif column_id == "#3":
+            player = 2
+        else:
+            return None
+        frame_str = self.timeline_tree.set(row_id, "frame")
+        if not frame_str:
+            return None
+        frame_index = int(frame_str) - 1
+        return frame_index, player
+
+    def _apply_preset_to_frame(self, preset: str, frame_index: int, player: int) -> None:
+        steps = PRESET_DEFINITIONS.get(preset)
+        if not steps:
+            return
+        max_frames = len(self.timeline.frames)
+        if max_frames == 0:
+            return
+        for offset, step in enumerate(steps):
+            target_index = frame_index + offset
+            if target_index >= max_frames:
+                break
+            self.timeline.set_input(target_index, player, step)
+        self._refresh_timeline()
+
+    def _apply_notation_to_frame(self, notation: str, frame_index: int, player: int) -> None:
+        if not notation:
+            return
+        self.timeline.set_input(frame_index, player, notation)
+        self._refresh_timeline()
+
+    def _build_input_builder(self, parent: ttk.Frame) -> None:
+        ttk.Label(parent, text="Click buttons, then drag the block").grid(row=0, column=0, pady=(4, 6))
+
+        dpad_frame = ttk.Frame(parent)
+        dpad_frame.grid(row=1, column=0, pady=(0, 6))
+        self.dpad_canvas = tk.Canvas(dpad_frame, width=140, height=140, highlightthickness=0)
+        self.dpad_canvas.grid(row=0, column=0)
+        self._add_dpad_button(self.dpad_canvas, "u", 70, 25, "↑")
+        self._add_dpad_button(self.dpad_canvas, "b", 25, 70, "←")
+        self._add_dpad_button(self.dpad_canvas, "f", 115, 70, "→")
+        self._add_dpad_button(self.dpad_canvas, "d", 70, 115, "↓")
+        self.dpad_canvas.tag_bind("dpad", "<ButtonPress-1>", self._on_dpad_click)
+
+        buttons_frame = ttk.Frame(parent)
+        buttons_frame.grid(row=2, column=0, pady=(0, 6))
+        self.buttons_canvas = tk.Canvas(buttons_frame, width=140, height=140, highlightthickness=0)
+        self.buttons_canvas.grid(row=0, column=0)
+        self._add_button_circle(self.buttons_canvas, "1", 35, 35)
+        self._add_button_circle(self.buttons_canvas, "2", 105, 35)
+        self._add_button_circle(self.buttons_canvas, "3", 35, 105)
+        self._add_button_circle(self.buttons_canvas, "4", 105, 105)
+        self.buttons_canvas.tag_bind("btn", "<ButtonPress-1>", self._on_button_click)
+
+        block_frame = ttk.Frame(parent)
+        block_frame.grid(row=3, column=0, pady=(0, 6))
+        self.builder_block = tk.Canvas(block_frame, width=140, height=40, highlightthickness=0)
+        self.builder_block.grid(row=0, column=0)
+        self.builder_block.create_rectangle(5, 5, 135, 35, fill="#404040", outline="#4f4f4f", tags=("block",))
+        self.builder_block_text = self.builder_block.create_text(70, 20, text="Select inputs", fill="#ffffff")
+        self.builder_block.bind("<ButtonPress-1>", self._start_custom_drag)
+        self.builder_block.bind("<B1-Motion>", self._update_drag)
+        self.builder_block.bind("<ButtonRelease-1>", self._end_drag)
+        ttk.Button(parent, text="Clear Builder", command=self._clear_builder).grid(row=4, column=0, pady=(0, 6))
+
+    def _add_dpad_button(self, canvas: tk.Canvas, token: str, x: int, y: int, label: str) -> None:
+        oval = canvas.create_oval(x - 20, y - 20, x + 20, y + 20, fill="#f0f0f0", outline="#666", tags=("dpad", token))
+        text = canvas.create_text(x, y, text=label, fill="#222", tags=("dpad", token))
+        self.dpad_items[token] = (oval, text)
+
+    def _add_button_circle(self, canvas: tk.Canvas, token: str, x: int, y: int) -> None:
+        oval = canvas.create_oval(x - 22, y - 22, x + 22, y + 22, fill="#f0f0f0", outline="#666", tags=("btn", token))
+        text = canvas.create_text(x, y, text=token, fill="#222", tags=("btn", token))
+        self.button_items[token] = (oval, text)
+
+    def _on_dpad_click(self, event: tk.Event) -> None:
+        canvas = event.widget
+        if not isinstance(canvas, tk.Canvas):
+            return
+        current = canvas.find_withtag("current")
+        if not current:
+            return
+        tags = canvas.gettags(current[0])
+        token = next((tag for tag in tags if tag in self.dpad_items), None)
+        if not token:
+            return
+        if token in self.builder_directions:
+            self.builder_directions.remove(token)
+        else:
+            self.builder_directions.add(token)
+        self._update_builder_visuals()
+
+    def _on_button_click(self, event: tk.Event) -> None:
+        canvas = event.widget
+        if not isinstance(canvas, tk.Canvas):
+            return
+        current = canvas.find_withtag("current")
+        if not current:
+            return
+        tags = canvas.gettags(current[0])
+        token = next((tag for tag in tags if tag in self.button_items), None)
+        if not token:
+            return
+        if token in self.builder_buttons:
+            self.builder_buttons.remove(token)
+        else:
+            self.builder_buttons.add(token)
+        self._update_builder_visuals()
+
+    def _update_builder_visuals(self) -> None:
+        for token, (oval, text) in self.dpad_items.items():
+            fill = "#ffb3b3" if token in self.builder_directions else "#f0f0f0"
+            if self.dpad_canvas:
+                self.dpad_canvas.itemconfigure(oval, fill=fill)
+                self.dpad_canvas.itemconfigure(text, fill="#222")
+        for token, (oval, text) in self.button_items.items():
+            fill = "#ffb3b3" if token in self.builder_buttons else "#f0f0f0"
+            if self.buttons_canvas:
+                self.buttons_canvas.itemconfigure(oval, fill=fill)
+                self.buttons_canvas.itemconfigure(text, fill="#222")
+        notation = self._compose_builder_notation()
+        self.builder_notation.set(notation)
+        if self.builder_block and self.builder_block_text:
+            label = notation if notation else "Select inputs"
+            self.builder_block.itemconfigure(self.builder_block_text, text=label)
+
+    def _compose_builder_notation(self) -> str:
+        parts: list[str] = []
+        if self.builder_directions:
+            order = ["u", "d", "b", "f"]
+            parts.append("".join([token for token in order if token in self.builder_directions]))
+        if self.builder_buttons:
+            parts.extend(sorted(self.builder_buttons, key=lambda x: int(x)))
+        return "+".join(parts)
+
+    def _clear_builder(self) -> None:
+        self.builder_directions.clear()
+        self.builder_buttons.clear()
+        self._update_builder_visuals()
+
+    def _start_custom_drag(self, event: tk.Event) -> None:
+        notation = self.builder_notation.get()
+        if not notation:
+            return
+        self.active_drag_kind = "custom"
+        self.active_drag_payload = notation
+        self._start_drag_indicator(event, notation)
+
+    def _open_mapping_editor(self) -> None:
+        if self.mapping_window and tk.Toplevel.winfo_exists(self.mapping_window):
+            self.mapping_window.focus_set()
+            return
+        self.mapping_window = tk.Toplevel(self.root)
+        self.mapping_window.title("Input Mapping (JSON)")
+        self.mapping_window.geometry("480x360")
+        self.mapping_window.protocol("WM_DELETE_WINDOW", self._close_mapping_editor)
+
+        frame = ttk.Frame(self.mapping_window, padding=10)
+        frame.grid(row=0, column=0, sticky="nsew")
+        self.mapping_window.columnconfigure(0, weight=1)
+        self.mapping_window.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=1)
+
+        self.mapping_text = tk.Text(frame, height=12)
+        self.mapping_text.grid(row=0, column=0, sticky="nsew")
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=1, column=0, sticky="ew", pady=6)
+        ttk.Button(buttons, text="Reload", command=self._reload_mapping).grid(row=0, column=0, sticky="w", padx=4)
+        ttk.Button(buttons, text="Save", command=self._save_mapping).grid(row=0, column=1, sticky="w", padx=4)
+
+        self._reload_mapping()
+
+    def _close_mapping_editor(self) -> None:
+        if self.mapping_window:
+            self.mapping_window.destroy()
+        self.mapping_window = None
+        self.mapping_text = None
+
+    def _reload_mapping(self) -> None:
+        if not self.mapping_text:
+            return
+        try:
+            self.mapper.load()
+            self.mapping_text.delete("1.0", tk.END)
+            self.mapping_text.insert(tk.END, json.dumps(self.mapper.mapping, indent=2))
+            self._log("Mapping reloaded")
+        except ValueError as exc:
+            messagebox.showerror("Mapping Error", str(exc))
+
+    def _save_mapping(self) -> None:
+        if not self.mapping_text:
+            return
+        raw = self.mapping_text.get("1.0", tk.END).strip()
+        try:
+            self.mapper.save(raw)
+            self._log("Mapping saved")
+        except (ValueError, json.JSONDecodeError) as exc:
+            messagebox.showerror("Mapping Error", str(exc))
+
+    def _start_playback(self) -> None:
+        if self.playback_thread and self.playback_thread.is_alive():
+            return
+        self._apply_backend()
+        self._focus_window(auto=True)
+        self.stop_event.clear()
+        self.playback_thread = threading.Thread(target=self._playback_loop, daemon=True)
+        self.playback_thread.start()
+
+    def _stop_playback(self) -> None:
+        self.stop_event.set()
+        self._log("Playback stopped")
+
+    def _apply_backend(self) -> None:
+        backend = self.backend_var.get()
+        self.emulator.mode = backend
+        if backend == "pydirectinput" and not PYDIRECT_AVAILABLE:
+            self._log("pydirectinput not available; falling back to log-only.")
+        elif backend == "pynput" and not PYNPUT_AVAILABLE:
+            self._log("pynput not available; falling back to log-only.")
+
+    def _playback_loop(self) -> None:
+        fps = max(1, self.fps_var.get())
+        frame_duration = 1.0 / fps
+        start_delay = max(0.0, self.start_delay_var.get())
+        loop_enabled = self.loop_enabled_var.get()
+        loop_count = max(0, self.loop_count_var.get())
+        loop_target = loop_count if loop_enabled else 1
+
+        if start_delay:
+            self._log(f"Startup delay: {start_delay:.2f}s")
+            time.sleep(start_delay)
+
+        loops_done = 0
+        self._log(f"Playback started at {fps} FPS")
+        while not self.stop_event.is_set():
+            loops_done += 1
+            self._log(f"Loop {loops_done}")
+            loop_start = time.perf_counter()
+            for idx, frame in enumerate(self.timeline.frames):
+                if self.stop_event.is_set():
+                    break
+                frame_start = loop_start + (idx * frame_duration)
+                self._sleep_until(frame_start)
+                self._log(f"Frame {idx:03d} -> P1: {frame.p1 or '-'} | P2: {frame.p2 or '-'}")
+                self._emit_inputs(frame, frame_start + frame_duration)
+            if not loop_enabled:
+                break
+            if loop_target and loops_done >= loop_target:
+                break
+        self._log("Playback finished")
+
+    def _focus_window(self, auto: bool = False) -> None:
+        title = self.window_title_var.get().strip()
+        if not title:
+            if not auto:
+                messagebox.showwarning("Focus Window", "Please provide a window title.")
+            return
+        if platform.startswith("win"):
+            success = self._focus_window_windows(title)
+        elif platform == "darwin":
+            success = self._focus_window_macos(title)
+        else:
+            success = self._focus_window_linux(title)
+        if success:
+            self._log(f"Focused window: {title}")
+        else:
+            self._log(f"Failed to focus window: {title}")
+            if not auto:
+                messagebox.showwarning(
+                    "Focus Window",
+                    "Unable to focus the window automatically. Try clicking the game window manually.",
+                )
+
+    def _focus_window_windows(self, title: str) -> bool:
+        try:
+            import ctypes
+        except ImportError:
+            return False
+
+        user32 = ctypes.windll.user32
+        user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]  # type: ignore[attr-defined]
+        user32.EnumWindows.argtypes = [ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM), ctypes.wintypes.LPARAM]  # type: ignore[attr-defined]
+        user32.GetWindowTextW.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.LPWSTR, ctypes.c_int]  # type: ignore[attr-defined]
+        user32.IsWindowVisible.argtypes = [ctypes.wintypes.HWND]  # type: ignore[attr-defined]
+        user32.ShowWindow.argtypes = [ctypes.wintypes.HWND, ctypes.c_int]  # type: ignore[attr-defined]
+
+        matches: list[int] = []
+        title_lower = title.lower()
+
+        def enum_handler(hwnd, _):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length == 0:
+                return True
+            buffer = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buffer, length + 1)
+            window_title = buffer.value
+            if title_lower in window_title.lower():
+                matches.append(hwnd)
+                return False
+            return True
+
+        enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)(enum_handler)
+        user32.EnumWindows(enum_proc, 0)
+
+        if not matches:
+            return False
+        handle = matches[0]
+        user32.ShowWindow(handle, 5)
+        return bool(user32.SetForegroundWindow(handle))
+
+    def _focus_window_macos(self, title: str) -> bool:
+        script = f'tell application "System Events" to set frontmost of the first process whose name is "{title}" to true'
+        result = os.system(f"osascript -e '{script}'")
+        return result == 0
+
+    def _focus_window_linux(self, title: str) -> bool:
+        if os.system("command -v wmctrl >/dev/null 2>&1") != 0:
+            return False
+        result = os.system(f"wmctrl -a '{title}'")
+        return result == 0
+
+    def _emit_inputs(self, frame: FrameInput, frame_end: float) -> None:
+        keys_to_press: list[str] = []
+        for label, player, notation in (("P1", 1, frame.p1), ("P2", 2, frame.p2)):
+            steps = self.parser.parse(notation, player)
+            if not steps:
+                continue
+            if len(steps) > 1:
+                self._log(f"{label} warning: multiple steps in one frame, using first step only")
+            step = steps[0]
+            self._log(f"{label} step -> {step}")
+            keys_to_press.extend(step)
+        if keys_to_press:
+            self.emulator.key_down(keys_to_press)
+            self._sleep_until(frame_end)
+            self.emulator.key_up(keys_to_press)
+        else:
+            self._sleep_until(frame_end)
+
+    def _sleep_until(self, target_time: float) -> None:
+        while not self.stop_event.is_set():
+            now = time.perf_counter()
+            remaining = target_time - now
+            if remaining <= 0:
+                return
+            time.sleep(min(remaining, 0.002))
+
+    def _log(self, message: str) -> None:
+        self.log_queue.put(message)
+
+    def _poll_log(self) -> None:
+        try:
+            while True:
+                msg = self.log_queue.get_nowait()
+                self.log_list.insert(tk.END, msg)
+                self.log_list.yview_moveto(1)
+        except queue.Empty:
+            pass
+        self.root.after(100, self._poll_log)
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = TekkenInputApp(root)
+    root.mainloop()
